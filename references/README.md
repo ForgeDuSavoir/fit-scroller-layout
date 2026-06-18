@@ -1,0 +1,12 @@
+# References
+
+This directory contains project-specific references used to understand,
+design and implement Fit Scroller.
+
+References stored here are supporting material for the project. They are not
+part of the Fit Scroller runtime behavior.
+
+## Structure
+
+- `local/`: local-only references that are ignored by git.
+
