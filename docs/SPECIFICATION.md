@@ -96,10 +96,23 @@ current viewport offset.
 
 Configuration is defined per display.
 
+The user may define:
+
+- a default display configuration;
+- display-specific configurations keyed by display identifier.
+
+When a workspace is laid out on a display, Fit Scroller resolves the effective
+configuration for that display. Display-specific values override default
+values. If no display-specific configuration exists, the default configuration
+is used.
+
 ### Required values
 
 - `allowed_dimensions`: a non-empty set of allowed dimensions;
 - `scroll_direction`: one of `right`, `left`, `down` or `up`.
+
+These required values must be present in the effective configuration for every
+display used by Fit Scroller.
 
 ### Dimension constraints
 
@@ -120,6 +133,10 @@ Invalid configuration must be rejected with a diagnostic that identifies the
 invalid value. Fit Scroller must not silently clamp, remove or reinterpret an
 invalid dimension.
 
+An invalid display-specific configuration invalidates that display's effective
+configuration. It must not be silently ignored in favor of the default
+configuration.
+
 ## Window Lifecycle
 
 ### Insertion
@@ -129,8 +146,7 @@ focused tiled window.
 
 If no tiled window is focused, it is appended to the window order.
 
-The new window starts in auto dimension mode unless a matching window rule
-assigns a forced dimension.
+The new window starts in auto dimension mode.
 
 After insertion, the layout is recomputed and the viewport must reveal the new
 window.

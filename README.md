@@ -9,8 +9,11 @@ When additional windows can no longer fit while respecting those dimension const
 
 This concept is currently implemented as a custom layout for Hyprland, but the underlying ideas are independent of any specific window manager.
 
-The detailed behavioral contract and unresolved design decisions are documented
-in [SPECIFICATION.md](SPECIFICATION.md).
+The detailed behavioral contract is documented in
+[docs/SPECIFICATION.md](docs/SPECIFICATION.md).
+
+The first implementation architecture is documented in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ---
 
@@ -41,7 +44,7 @@ Fit Scroller is driven by a small set of concepts that define how windows are ar
 Each display defines a set of allowed window dimensions.
 
 A window may only occupy one of these predefined dimensions. The layout never performs arbitrary resizing or pixel-level adjustments.
-The dimensions are defined as a percentage of the screens width and height.
+The dimensions are defined as a percentage of the screen's width and height.
 
 Example:
 ```lua
@@ -64,6 +67,44 @@ These predefined dimensions are not arbitrary. They represent practical window d
 The exact definition of "practical" depends on the display and user preferences, but the underlying principle remains the same: a window should occupy dimensions that are appropriate for the task being performed. Practical dimensions therefore define both minimum usable sizes and sensible aspect ratios.
 
 Fit Scroller limits windows to a predefined set of practical dimensions and introduces scrolling once no additional windows can fit while preserving those dimensions.
+### Per-display Configuration
+Fit Scroller configuration is resolved per display.
+
+Different displays may use different allowed dimensions and different scroll directions. This allows a large ultrawide display, a laptop display and a vertical display to each define dimensions that are practical for their own size, shape and workflow.
+
+Example:
+```lua
+{
+    default = {
+        allowed_dimensions = {
+            { 1.0, 1.0 },
+            { 0.5, 1.0 },
+            { 0.5, 0.5 },
+        },
+        scroll_direction = "right",
+    },
+    displays = {
+        ["eDP-1"] = {
+            allowed_dimensions = {
+                { 1.0, 1.0 },
+                { 0.5, 1.0 },
+            },
+            scroll_direction = "down",
+        },
+        ["DP-1"] = {
+            allowed_dimensions = {
+                { 1.0, 1.0 },
+                { 0.5, 1.0 },
+                { 0.333, 1.0 },
+                { 0.5, 0.5 },
+            },
+            scroll_direction = "right",
+        },
+    },
+}
+```
+
+When a workspace is displayed on a given display, Fit Scroller uses that display's configuration. If no display-specific configuration exists, the default configuration is used.
 ### Automatic Fitting
 When windows are opened, closed or moved, the layout automatically adjusts window dimensions and positions to make the best use of the available space.
 
@@ -126,7 +167,7 @@ Here is an example of behavior for the following allowed dimensions configuratio
 |     A     |
 |           |
 +-----------+
-````
+```
 
 ### 2 Windows
 
@@ -148,40 +189,31 @@ Here is an example of behavior for the following allowed dimensions configuratio
 +-----+-----+
 ```
 
-or
-
-```text
-+-----+-----+
-|  A  |     |
-|-----+  B  |
-|  C  |     |
-+-----+-----+
-```
-
 ### 4 Windows
 
 ```text
 +-----+-----+
 |  A  |  B  |
 |-----+-----|
-|  D  |  C  |
+|  C  |  D  |
 +-----+-----+
 ```
 
 ### 5+ Windows
 
-Additional windows are placed outside the visible viewport and viewport scrlls to newly focused window.
+Additional windows are placed outside the visible viewport and the viewport
+scrolls to the newly focused window.
 
 ```text
       +-------------+ 
 +-----|+-----+-----+|
 |  A  ||  B  |     ||
 |-----|+-----|  E  ||
-|  D  ||  C  |     ||
+|  C  ||  D  |     ||
 +-----|+-----+-----+|
       +-------------+
 ```
-(A and D not visible, B, C and E visible)
+(A and C not visible, B, D and E visible)
 
 Then
 
@@ -190,10 +222,10 @@ Then
 +-----|+-----+-----+|
 |  A  ||  B  |  E  ||
 |-----|+-----|-----||
-|  D  ||  C  |  F  ||
+|  C  ||  D  |  F  ||
 +-----|+-----+-----+|
       +-------------+
 ```
-(A and D not visible, B, C, E and F visible)
+(A and C not visible, B, D, E and F visible)
 
 The viewport scrolls through the workspace similarly to a scrolling tiling manager.
