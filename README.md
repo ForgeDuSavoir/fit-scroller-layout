@@ -9,6 +9,9 @@ When additional windows can no longer fit while respecting those dimension const
 
 This concept is currently implemented as a custom layout for Hyprland, but the underlying ideas are independent of any specific window manager.
 
+The detailed behavioral contract and unresolved design decisions are documented
+in [SPECIFICATION.md](SPECIFICATION.md).
+
 ---
 
 ## Design Principles
