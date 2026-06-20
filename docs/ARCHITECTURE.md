@@ -21,8 +21,18 @@ examples:
 - `ctx.area`;
 - `target:place(area)`.
 
-Any Hyprland-specific behavior not represented in these examples must stay
-behind the Hyprland adapter so the core layout algorithm remains testable.
+The source-level Hyprland `0.55.4` API review is recorded in
+`../references/hyprland-custom-layout-api.md`. It confirms additional
+integration points used by Fit Scroller:
+
+- `hl.on("window.active", callback)` for focus-change observation;
+- `window.address` for building `address:<window.address>` focus selectors;
+- `hl.dispatch(hl.dsp.focus({ window = selector }))` for focusing a specific
+  window;
+- automatic recalculation after successful `layout_msg(ctx, msg)`.
+
+Any Hyprland-specific behavior must stay behind the Hyprland boundary so the
+core layout algorithm remains testable.
 
 ## Architectural Goals
 
@@ -56,22 +66,69 @@ For V1 this can still be shipped as a small Lua layout. The split above is a
 logical architecture; files may be merged temporarily during early
 implementation if Hyprland loading constraints require it.
 
+The implementation should load sibling modules relative to `layout/init.lua`,
+not relative to Hyprland's configuration directory or Lua `package.path`.
+Hyprland's import resolution may otherwise force users to install all modules
+under a specific configuration path. The Phase 1 loader resolves the current
+`init.lua` path and loads `hyprland_adapter.lua` from the same directory.
+
 ## Runtime Overview
 
 Fit Scroller runs through two entry points exposed to Hyprland.
 
-### Recalculate Flow
+It also installs one global Hyprland Lua event listener during initialization.
+This listener is integration glue, not core layout behavior.
+
+### Focus Event Flow
 
 ```text
-Hyprland recalculate(ctx)
+Hyprland window.active event
+    -> init.lua checks that the active window uses lua:fit-scroller
+    -> init.lua dispatches hl.dsp.layout("follow")
+    -> Hyprland calls layout_msg(ctx, "follow")
+    -> adapter synchronizes active target from ctx.targets
+    -> viewport is adjusted during the following recalculation
+```
+
+This flow is required because Hyprland focus dispatchers can change active
+focus without calling a custom layout's `recalculate(ctx)` immediately.
+
+The event listener must not perform layout computation directly. It only asks
+the current layout to run its normal `follow` command.
+
+### Structural Layout Flow
+
+```text
+Hyprland structural event or structural command
     -> adapter extracts live targets and viewport area
     -> config is loaded and validated
     -> workspace state is synchronized with live targets
     -> solver computes desired logical layout
-    -> viewport is adjusted to reveal focused window
+    -> state.last_layout is updated after successful computation
     -> adapter converts logical rectangles to Hyprland areas
     -> target:place(area) is called for each visible or managed target
 ```
+
+Structural layout is triggered only by:
+
+- target count changes;
+- logical window order changes;
+- dimension mode changes.
+
+### Viewport Flow
+
+```text
+Hyprland focus event or future manual scroll command
+    -> adapter reads state.last_layout
+    -> viewport computes or updates viewport_offset
+    -> adapter reapplies the existing logical layout with the new offset
+```
+
+Viewport changes must not invoke the solver.
+
+When one user-visible action causes both a structural change and a focus
+change, the structural layout flow runs first and the viewport flow runs after
+it using the freshly computed `last_layout`.
 
 ### Command Flow
 
@@ -86,13 +143,17 @@ Hyprland layout_msg(ctx, msg)
 ```
 
 Commands must not directly place windows. Placement is owned by the
-recalculation flow.
+structural layout and viewport flows.
 
 Commands that cannot make the layout invalid, such as boundary no-ops, may
 return immediately. Commands that may affect solver validity, such as
 `toggle dimension`, should be applied through a draft workspace state and
 committed only after the adapter confirms that recalculation can produce a
 valid layout.
+
+Focus commands are not structural commands. They request a Hyprland focus
+change, then the viewport flow reveals the focused target using
+`state.last_layout`.
 
 ## Modules
 
@@ -102,9 +163,12 @@ Registers the layout with Hyprland.
 
 Responsibilities:
 
+- load sibling modules relative to `init.lua`;
 - call `hl.layout.register("fit-scroller", layout)`;
 - expose `recalculate(ctx)`;
 - expose `layout_msg(ctx, msg)`;
+- subscribe to Hyprland's `window.active` event and dispatch `follow` when the
+  active window belongs to `lua:fit-scroller`;
 - delegate all substantial work to the adapter and core modules.
 
 This file should stay thin.
@@ -119,19 +183,17 @@ Responsibilities:
 - identify the active target using `target.window.active` when available;
 - build stable target ids using `target.window.stable_id` when available;
 - call `target:place(area)`;
+- focus logical targets by building `address:<descriptor.window.address>` and
+  calling `hl.dispatch(hl.dsp.focus({ window = selector }))`;
 - translate core rectangles into Hyprland-compatible areas;
 - surface command errors as layout message return strings.
 
 The adapter is allowed to know about Hyprland object shapes. Core modules are
 not.
 
-Open integration risk:
-
-- the local examples do not show how to programmatically change focus. If the
-  API exposes such a method, `focus previous` and `focus next` should use it
-  through this adapter. If it does not, those commands will need to return a
-  clear unsupported-command error until a valid Hyprland focus mechanism is
-  identified.
+The adapter must not invoke `hyprctl`, `os.execute` or `io.popen` from
+`recalculate(ctx)` or `layout_msg(ctx, msg)`. All focus integration must use
+Hyprland's in-process Lua API.
 
 ### [`config.lua`](layout/config.md)
 
@@ -142,6 +204,8 @@ Responsibilities:
 - resolve configuration for the current display;
 - provide `allowed_dimensions`;
 - provide `scroll_direction`;
+- provide `tiling_mode`;
+- provide `insert_mode`;
 - support display-specific overrides;
 - reject invalid dimensions;
 - reject duplicate dimensions;
@@ -189,8 +253,7 @@ Responsibilities:
 
 - collect currently present target ids;
 - remove ids that no longer exist;
-- insert new ids immediately after the focused id;
-- append new ids when no focused id exists;
+- insert new ids according to `config.insert_mode`;
 - preserve the relative order of existing ids;
 - return an ordered target list for the solver.
 
@@ -282,10 +345,7 @@ Inputs:
 
 - validated configuration;
 - ordered targets;
-- dimension modes;
-- focused id;
-- viewport rectangle;
-- current viewport offset.
+- dimension modes.
 
 Output:
 
@@ -298,7 +358,6 @@ Layout = {
         [id] = Dimension,
     },
     workspace_extent = number,
-    viewport_offset = number,
 }
 ```
 
@@ -312,20 +371,19 @@ Responsibilities:
 - rank candidates according to the spec;
 - return a deterministic best candidate.
 
-Candidate ranking:
+The solver must not use focus or viewport offset to choose dimensions or
+world-space positions. Focus reveal is a viewport translation step owned by
+`viewport.lua` and the adapter.
 
-1. highest number of fully visible windows in the viewport containing the
-   focused window;
-2. largest minimum visible window area;
-3. smallest workspace extent along the scroll axis;
-4. stable canonical position order.
+V1 supports order-mode tiling only. Spatial tiling is reserved for a future
+version.
 
 Recommended V1 strategy:
 
 - normalize all directions to a canonical `right` layout problem;
-- generate candidate rows or columns using allowed dimensions;
-- pack windows in logical order;
-- evaluate visibility and extent;
+- use `tiling_mode = "split"` or `tiling_mode = "ajuste"`;
+- preserve order by assigning windows to ordered slots;
+- minimize scroll only after filling visible space and preserving order;
 - transform the selected canonical layout back to the configured direction.
 
 This keeps direction handling separate from packing complexity.
@@ -343,6 +401,9 @@ Responsibilities:
 
 Manual scrolling is intentionally absent from V1.
 
+`viewport.lua` consumes solver output from `state.last_layout`; it does not
+trigger or influence the solver.
+
 ## Data Flow Details
 
 ### Target Identity
@@ -354,8 +415,11 @@ integration limitation.
 
 ### Window Insertion
 
-New targets are inserted after the currently focused target. The insertion
-logic belongs to `target_sync.lua`, not to the solver.
+New targets are inserted according to the effective `config.insert_mode`.
+
+The insertion logic belongs to `target_sync.lua`, not to the solver. For
+`insert_mode = "view"`, the adapter provides the last visible id from
+`state.last_layout` and `state.viewport_offset`.
 
 The solver must only consume the resulting order.
 
@@ -386,6 +450,10 @@ Hyprland exposes an API for it.
 
 After focus changes, recalculation must reveal the focused window.
 
+Focus changes must not trigger the solver. They update `focused_id`, compute a
+viewport offset from `state.last_layout`, and reapply the previous layout with
+that offset.
+
 ## Error Handling
 
 Recoverable failures should preserve `state.last_layout`.
@@ -415,7 +483,8 @@ Recommended test layers:
 - `commands` tests for move and toggle behavior;
 - `traversal` tests for each direction;
 - `viewport` tests for reveal and clamping;
-- `solver` tests for candidate ranking and forced dimensions;
+- `solver` tests for `split`, `ajuste`, order preservation, forced dimensions
+  and independence from focus/viewport state;
 - adapter smoke tests using mocked `ctx` and `target:place`.
 
 The Hyprland adapter should be kept thin enough that most behavior can be
@@ -455,9 +524,9 @@ verified with plain Lua tests.
   ([`geometry.lua`](layout/geometry.md));
 - implement direction traversal
   ([`traversal.lua`](layout/traversal.md));
-- implement candidate generation
+- implement order-mode layout generation
   ([`solver.lua`](layout/solver.md));
-- implement candidate ranking
+- implement `split` and `ajuste` tiling behavior
   ([`solver.lua`](layout/solver.md));
 - apply selected placements
   ([`solver.lua`](layout/solver.md),
@@ -465,9 +534,12 @@ verified with plain Lua tests.
 
 ### Phase 4: Focus and Viewport
 
-- implement `focus previous` and `focus next` if Hyprland focus control is
-  available
+- implement `focus previous` and `focus next` through Hyprland's in-process
+  Lua focus dispatcher
   ([`commands.lua`](layout/commands.md),
+  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
+- subscribe to `window.active` and dispatch `follow` for Fit Scroller windows
+  ([`init.lua`](layout/init.md),
   [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
 - implement focus reveal
   ([`viewport.lua`](layout/viewport.md));
@@ -479,12 +551,33 @@ verified with plain Lua tests.
 - validate configuration errors
   ([`config.lua`](layout/config.md),
   [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
+- validate `tiling_mode` and `insert_mode`, including the default
+  `insert_mode = "view"`
+  ([`config.lua`](layout/config.md));
+- harden insertion behavior for `last`, `first`, `view`, `after_focused` and
+  `before_focused`
+  ([`target_sync.lua`](layout/target_sync.md));
 - preserve last valid layout on recoverable failures
   ([`state.lua`](layout/state.md),
   [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
 - harden solver and viewport invalid-input behavior
   ([`solver.lua`](layout/solver.md),
   [`viewport.lua`](layout/viewport.md));
+- verify solver and viewport independence: focus changes and viewport changes
+  must never alter world-space placements or selected dimensions
+  ([`solver.lua`](layout/solver.md),
+  [`viewport.lua`](layout/viewport.md),
+  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
+- make state updates transactional for commands and recalculation: failed
+  validation, failed solving, failed viewport computation or failed placement
+  must not partially mutate workspace state
+  ([`state.lua`](layout/state.md),
+  [`commands.lua`](layout/commands.md),
+  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
+- update `state.last_layout` only after every target placement has been
+  computed and accepted
+  ([`state.lua`](layout/state.md),
+  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
 - add tests around edge cases
   ([`config.lua`](layout/config.md),
   [`target_sync.lua`](layout/target_sync.md),
@@ -496,13 +589,17 @@ verified with plain Lua tests.
 - document unsupported Hyprland API gaps if any remain
   ([`hyprland_adapter.lua`](layout/hyprland_adapter.md)).
 
+Phase 5 is complete only when the module-level Phase 5 acceptance criteria are
+met and the regression tests cover the documented `split`, `ajuste`,
+`insert_mode`, focus-follow and last-layout recovery behavior.
+
 ## Integration Questions
 
 This section tracks Hyprland integration details that affect the adapter.
 
 ### Focus changes
 
-Status: partially resolved.
+Status: resolved from Hyprland `0.55.4` source.
 
 The Hyprland dispatcher list documents several focus-related dispatchers:
 
@@ -517,41 +614,48 @@ default spatial or historical order. The preferred implementation is therefore:
 2. obtain a Hyprland window selector for that target, ideally an address;
 3. call Hyprland focus through the adapter.
 
-The local Lua examples show `target.window.stable_id` and `target.window.active`
-but do not show a focus method or a window address field. The adapter must
-verify whether a target exposes a usable address or direct focus method.
+Hyprland's Lua window object exposes `window.address` as `0x...`. The adapter
+must build an `address:` selector for the Lua dispatcher:
 
-If no focus API is available to Lua custom layouts, `focus previous` and
-`focus next` must remain unsupported in the adapter until a valid Hyprland
-mechanism is identified.
+```lua
+hl.dispatch(hl.dsp.focus({ window = "address:" .. window.address }))
+```
+
+Fit Scroller's adapter must use this path for logical focus commands.
+
+Hyprland also exposes `hl.on("window.active", callback)`, which Fit Scroller
+uses to dispatch `follow` when focus changes through normal Hyprland bindings.
+
+`hyprctl` must not be called from `layout_msg(ctx, msg)` or
+`recalculate(ctx)`.
 
 Sources:
 
 - <https://wiki.hypr.land/Configuring/Dispatchers/>
+- `../references/hyprland-custom-layout-api.md`
 
 ### `layout_msg` recalculation behavior
 
-Status: unresolved, requires runtime verification.
+Status: resolved from Hyprland `0.55.4` source.
 
 The Hyprland wiki documents layout-specific messages through the `layoutmsg`
 dispatcher on built-in layouts such as `scrolling`.
 
-The local Lua examples implement `layout_msg(ctx, msg)` and return `true` after
-state changes. They do not prove whether returning `true` automatically causes
-Hyprland to call `recalculate(ctx)`.
+The Lua layout provider calls `recalculate()` after a handled
+`layout_msg(ctx, msg)`.
 
 Implementation requirement:
 
-- add a smoke test or manual runtime check that sends a layout message and
-  verifies whether `recalculate(ctx)` is called automatically;
-- if not, the adapter must explicitly request or force recomputation using the
-  mechanism provided by Hyprland 0.55.
+- return a string for command errors;
+- return success (`true` or `nil`) only after command handling is complete;
+- rely on Hyprland's automatic recalculation after successful layout messages.
 
 Sources:
 
 - <https://wiki.hypr.land/Configuring/Scrolling-Layout/>
 - `../references/local/hyprland-layout-examples/manual.lua`
 - `../references/local/hyprland-layout-examples/spiral.lua`
+- `../references/hyprland-custom-layout-api.md`
 
 ### `ctx.area` semantics
 
@@ -581,8 +685,7 @@ Sources:
 
 ### `target:place(area)` shape
 
-Status: partially resolved from local examples, not officially documented in
-the wiki sources found.
+Status: resolved from Hyprland `0.55.4` source.
 
 The local examples pass areas returned by Hyprland helpers directly to
 `target:place(area)`:
@@ -592,17 +695,14 @@ The local examples pass areas returned by Hyprland helpers directly to
 - `ctx:split(area, side, ratio)`;
 - `ctx.area`.
 
-This implies that `target:place` expects a Hyprland area object compatible with
-those helpers. It does not prove whether a plain Lua rectangle table can be
-passed directly.
+Hyprland's Lua layout target binding reads a plain table with numeric
+`x`, `y`, `w` and `h` fields, then calls `setPositionGlobal`.
 
 Implementation requirement:
 
 - keep core geometry in host-independent `Rect` values;
-- convert `Rect` values to the exact Hyprland area shape in
-  `hyprland_adapter.lua`;
-- verify during Phase 1 whether direct tables are accepted or whether all areas
-  must be produced through Hyprland helper methods.
+- convert `Rect` values to `{ x, y, w, h }` tables in
+  `hyprland_adapter.lua`.
 
 Sources:
 
@@ -610,6 +710,7 @@ Sources:
 - `../references/local/hyprland-layout-examples/grid.lua`
 - `../references/local/hyprland-layout-examples/manual.lua`
 - `../references/local/hyprland-layout-examples/spiral.lua`
+- `../references/hyprland-custom-layout-api.md`
 
 ### Workspace identity in `ctx`
 

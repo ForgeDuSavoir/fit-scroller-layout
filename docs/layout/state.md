@@ -52,8 +52,11 @@ Phase 2 uses:
 - `dimension_mode_by_id`;
 - `focused_id`.
 
-`viewport_offset` and `last_layout` are initialized for later phases but do not
-need full behavior yet.
+`viewport_offset` and `last_layout` are initialized for later phases.
+
+`last_layout` is the boundary between the solver and viewport systems: the
+solver updates it after structural changes, and viewport changes consume it
+without invoking the solver.
 
 ## Dimension Modes
 
@@ -142,20 +145,30 @@ computed by `viewport.lua`.
 
 ## Viewport Offset Rules
 
-The offset must be updated only after a valid layout has been computed.
+The offset must be updated only against a valid `last_layout`.
 
-Expected flow:
+Structural flow:
 
 ```text
-recalculate(ctx)
+structural change
     -> solver computes placements and workspace extent
-    -> viewport.reveal computes next offset
-    -> state.viewport_offset is updated
-    -> adapter places windows using that offset
+    -> state.last_layout is updated
 ```
 
-If layout computation fails, `state.viewport_offset` should keep its previous
-value. Full fallback to `last_layout` is completed in Phase 5.
+Viewport flow:
+
+```text
+focus change or future manual scroll
+    -> read state.last_layout
+    -> viewport.reveal computes next offset
+    -> state.viewport_offset is updated
+    -> adapter reapplies last_layout using that offset
+```
+
+Focus changes must not update `last_layout`.
+
+If layout computation fails, both `state.viewport_offset` and
+`state.last_layout` should keep their previous values.
 
 ## Focus State
 
@@ -166,6 +179,9 @@ rather than directly from `focus previous` or `focus next` command execution.
 
 This matters because a focus command may fail at the Hyprland integration
 boundary. In that case, state must not pretend a different window is focused.
+
+Changing `focused_id` may trigger viewport reveal. It must not trigger the
+solver by itself.
 
 ## Public API Additions
 
@@ -193,7 +209,7 @@ policy for invalid configuration or placement failures.
 
 ## Phase 4 Acceptance Criteria
 
-- `viewport_offset` survives repeated recalculations.
+- `viewport_offset` survives repeated structural recalculations.
 - Focus changes update `focused_id` only after Hyprland reports the active
   target.
 - Successful reveal updates `viewport_offset`.
@@ -232,6 +248,16 @@ recoverable reason.
 `last_layout` should not be updated until after every target placement has
 been accepted by the adapter.
 
+Updating `last_layout` immediately after solver success is not sufficient.
+The adapter must first:
+
+1. compute the layout;
+2. compute or clamp viewport offset;
+3. convert every target rectangle;
+4. verify every target can be placed;
+5. apply every placement;
+6. commit `last_layout` and state mutations.
+
 ## Recoverable Failures
 
 State should preserve the previous valid values for:
@@ -248,6 +274,7 @@ For these failures:
 - do not update `viewport_offset`;
 - do not update `last_layout`;
 - do not partially apply dimension mode changes;
+- do not partially apply target order changes;
 - do not claim a pending focus change succeeded.
 
 ## Transaction Pattern
@@ -264,6 +291,14 @@ state.commit_workspace_state(workspace_state, draft_state)
 This does not require a deep copy for every recalculation if implementation
 cost is too high, but command mutations should still be structured so a failed
 validation cannot leave partial state behind.
+
+Operations that should use this pattern:
+
+- target synchronization when descriptor validation can fail;
+- `toggle dimension`, because the next forced dimension can be solver-invalid;
+- `move previous` and `move next`, because order changes affect solver input;
+- recalculation paths that update `viewport_offset`;
+- updates to `last_layout`.
 
 Example for `toggle dimension`:
 
@@ -298,8 +333,12 @@ State tests should cover:
 
 - failed command validation does not mutate state;
 - failed forced-dimension update preserves the previous mode;
+- failed move command preserves previous order;
+- failed target synchronization preserves previous order and dimension modes;
 - failed recalculation keeps the previous `viewport_offset`;
+- failed recalculation keeps the previous `last_layout`;
 - `last_layout` updates only after successful placement;
+- focus-only reveal does not alter `last_layout` geometry;
 - invariant validation rejects duplicate order ids;
 - invariant validation rejects dimension modes for missing ids.
 
@@ -307,6 +346,7 @@ State tests should cover:
 
 - Recoverable failures do not corrupt workspace state.
 - `last_layout` represents only fully successful layouts.
+- State mutations are validate-then-commit for commands and recalculation.
 - Command mutations are validate-then-commit.
 - Debug invariant checks can identify inconsistent state.
 - Tests cover failed mutations and recovery state.

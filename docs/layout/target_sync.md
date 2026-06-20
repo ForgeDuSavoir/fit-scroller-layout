@@ -10,7 +10,7 @@ Phase 2: State and Commands.
 Scroller's logical window order.
 
 It is responsible for preserving existing order, removing closed windows and
-inserting new windows after the currently focused window.
+inserting new windows according to the configured `insert_mode`.
 
 ## Responsibilities
 
@@ -19,8 +19,7 @@ In Phase 2, `target_sync.lua` must:
 - receive normalized target descriptors from `hyprland_adapter.lua`;
 - remove ids that are no longer present;
 - preserve the relative order of existing ids;
-- insert new ids immediately after the focused id;
-- append new ids when no focused id is known;
+- insert new ids according to `config.insert_mode`;
 - clean removed window state through `state.lua`;
 - return targets in logical order.
 
@@ -45,47 +44,102 @@ TargetDescriptor = {
 
 `target_sync.lua` should not depend on any other Hyprland fields.
 
+It may also receive host-independent insertion context from the adapter:
+
+```lua
+InsertContext = {
+    insert_mode = "last" | "first" | "view" | "after_focused" | "before_focused",
+    focused_id = "B",
+    last_visible_id = "D",
+}
+```
+
+`last_visible_id` is computed outside `target_sync.lua` from
+`state.last_layout` and `state.viewport_offset`.
+
 ## Synchronization Algorithm
 
 Recommended algorithm:
 
 1. Build a `present_by_id` set from live targets.
-2. Store the previous `workspace_state.focused_id` as the insertion anchor.
+2. Store the previous `workspace_state.focused_id`.
 3. Remove missing ids from `workspace_state.order`.
 4. Remove missing ids from `workspace_state.dimension_mode_by_id`.
-5. Iterate live targets in Hyprland order.
-6. For each target not already in `order`, insert it after the insertion
-   anchor when that anchor is still present.
-7. If the insertion anchor is missing or unknown, append the new target.
-8. Update `workspace_state.focused_id` from the active target, if one exists
+5. Detect newly present ids in live target order.
+6. Insert each new id according to `insert_mode`.
+7. Update `workspace_state.focused_id` from the active target, if one exists
    after insertion.
-9. Return ordered target descriptors.
-
-This follows the insertion behavior in the specification and the pattern shown
-by the local `manual.lua` example.
+8. Return ordered target descriptors.
 
 ## New Window Insertion
 
-New windows are inserted immediately after the focused window.
+New windows are inserted according to the effective display configuration's
+`insert_mode`.
 
-The focused window used for insertion is the focus known before the current
-synchronization pass. This matters because Hyprland may already report a newly
-created window as active when `recalculate(ctx)` runs. In that case, the new
-window must still be inserted after the previously focused window, not after
-itself.
+### `insert_mode = "last"`
+
+Append each new window to the end of `workspace_state.order`.
+
+This preserves append-only ordering when explicitly configured.
+
+### `insert_mode = "first"`
+
+Insert each new window at the beginning of `workspace_state.order`.
+
+When several new windows appear in the same synchronization pass, preserve
+their relative live order.
+
+### `insert_mode = "after_focused"`
+
+Insert each new window immediately after the focused id known before the
+current synchronization pass.
+
+This matters because Hyprland may already report a newly created window as
+active when synchronization runs. In that case, the new window must still be
+inserted after the previously focused window, not after itself.
+
+If no focused id is known or the focused id is no longer present, fall back to
+`last`.
+
+### `insert_mode = "before_focused"`
+
+Insert each new window immediately before the focused id known before the
+current synchronization pass.
+
+This uses the same focus snapshot rule as `after_focused`: the anchor is the
+focused id known before the current synchronization pass, not a newly created
+window that Hyprland may already report as active.
+
+If no focused id is known or the focused id is no longer present, fall back to
+`last`.
+
+### `insert_mode = "view"`
+
+Insert each new window immediately after the last currently visible id.
+
+The last visible id is computed by the adapter from:
+
+- `state.last_layout`;
+- `state.viewport_offset`;
+- the current viewport size and direction.
+
+`target_sync.lua` should not compute visibility itself. If no last visible id
+is provided, or if that id is no longer present, fall back to `last`.
+
+This is the default V1 behavior.
 
 Example:
 
 ```text
 order: A B C
+insert_mode: after_focused
 focus: B
-new:   D
+new: D
 result: A B D C
 ```
 
 If several new windows appear in the same synchronization pass, they should be
-inserted in the live target order after the focused window, preserving their
-relative order.
+inserted in live target order while preserving their relative order.
 
 ## Removal
 
@@ -112,6 +166,21 @@ The module should return an ordered list:
 The solver later consumes this ordered list. In Phase 2, the adapter may still
 use it only for deterministic temporary placement.
 
+Starting in Phase 4, synchronization may also return metadata about the sync
+pass:
+
+```lua
+{
+    inserted_ids = { "C" },
+    structural_changed = true,
+}
+```
+
+The adapter uses the last inserted id as a reveal target during the same
+recalculation. This matters because Hyprland may focus a newly opened window
+after the custom layout has already read `target.window.active`, so waiting for
+the active flag alone can leave the viewport on the previous focus.
+
 ## Invariants
 
 After synchronization:
@@ -124,8 +193,12 @@ After synchronization:
 ## Phase 2 Acceptance Criteria
 
 - Existing order is preserved across recalculations.
-- New windows are inserted after the focused id.
-- New windows are appended when no focused id exists.
+- New windows respect `insert_mode = "last"`.
+- New windows respect `insert_mode = "first"`.
+- New windows respect `insert_mode = "after_focused"`.
+- New windows respect `insert_mode = "before_focused"`.
+- New windows respect `insert_mode = "view"` when a visible anchor exists.
+- New windows fall back to `last` when their mode-specific anchor is missing.
 - Closed windows are removed from order and dimension state.
 - The returned target list is ordered by Fit Scroller's logical order.
 
@@ -171,6 +244,15 @@ Recommended flow:
 5. apply state cleanup and insertion;
 6. return ordered descriptors.
 
+The function should return enough metadata for the adapter to distinguish:
+
+- structural changes caused by insertion or removal;
+- focus changes reported by Hyprland;
+- pure no-op synchronization.
+
+This metadata is required so focus-only recalculations can reveal the viewport
+without invoking the solver.
+
 ## Active Target Rules
 
 If exactly one descriptor is active, update `focused_id` to that id.
@@ -183,6 +265,26 @@ If no descriptor is active:
 If multiple descriptors are active, return an error. Fit Scroller should not
 guess which active window Hyprland intended.
 
+## Insert Mode Hardening
+
+Phase 5 must treat insertion mode as an explicit input, not as hidden target
+sync policy.
+
+Rules to verify:
+
+- `last` appends new ids at the end;
+- `first` inserts new ids at the beginning;
+- `view` inserts after the adapter-provided `last_visible_id`;
+- `after_focused` inserts after the focus snapshot from before the sync pass;
+- `before_focused` inserts before the focus snapshot from before the sync pass;
+- missing anchors for `view`, `after_focused` and `before_focused` fall back
+  to `last`;
+- several new ids in one sync pass keep their relative live order for every
+  mode.
+
+`target_sync.lua` must not compute visibility itself. For `view`, it trusts the
+adapter-provided `last_visible_id`.
+
 ## Phase 5 Test Cases
 
 Target sync tests should cover:
@@ -194,8 +296,13 @@ Target sync tests should cover:
 - removed ids clear dimension modes;
 - removed focused id is cleared when no active target replaces it;
 - no active target preserves existing focused id when still present;
-- several new windows inserted after the previous focused id;
-- insertion anchor uses previous focus, not newly active focus.
+- several new windows preserve relative order for every insert mode;
+- `last` appends new windows;
+- `first` prepends new windows;
+- `after_focused` insertion uses previous focus, not newly active focus;
+- `before_focused` insertion uses previous focus, not newly active focus;
+- `view` insertion uses adapter-provided last visible id;
+- missing focused or `view` anchor falls back to `last`.
 
 ## Phase 5 Acceptance Criteria
 
@@ -203,4 +310,5 @@ Target sync tests should cover:
 - Duplicate ids cannot enter `state.order`.
 - Removed ids clean order and dimension modes.
 - Focus state follows active target rules deterministically.
+- Insert mode behavior matches all documented modes and fallbacks.
 - Tests cover malformed descriptors, removals and multi-window insertion.

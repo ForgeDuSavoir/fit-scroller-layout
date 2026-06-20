@@ -2,9 +2,9 @@
 ## Overview
 **Fit practical windows before scrolling.**
 
-Fit Scroller is a tiling layout concept built around a simple idea: maximize the number of practical windows visible on screen. When additional windows can no longer fit while preserving practical window dimensions, the layout introduces scrolling rather than shrinking existing windows further.
+Fit Scroller is a tiling layout concept built around a simple idea: fill the visible space with practical window dimensions before scrolling. When additional windows can no longer fit while preserving practical window dimensions and window order, the layout introduces scrolling rather than shrinking existing windows further.
 
-Instead of allowing arbitrary window dimensions or continuously shrinking windows as new ones are opened, Fit Scroller arranges windows using a predefined set of practical window dimensions and automatically reorganizes the layout to maximize the number of practical windows visible on screen.
+Instead of allowing arbitrary window dimensions or continuously shrinking windows as new ones are opened, Fit Scroller arranges windows using a predefined set of practical window dimensions and automatically reorganizes the layout to fill the visible space while preserving the logical window order.
 When additional windows can no longer fit while respecting those dimension constraints, the layout introduces scrolling. Navigation then behaves similarly to a scrolling tiling manager, allowing the workspace to extend beyond the visible screen area.
 
 This concept is currently implemented as a custom layout for Hyprland, but the underlying ideas are independent of any specific window manager.
@@ -14,6 +14,9 @@ The detailed behavioral contract is documented in
 
 The first implementation architecture is documented in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+The Hyprland installation and configuration guide is documented in
+[docs/USER_GUIDE_FOR_HYPRLAND_CUSTOM_LAYOUT.md](docs/USER_GUIDE_FOR_HYPRLAND_CUSTOM_LAYOUT.md).
 
 ---
 
@@ -31,7 +34,7 @@ Fit Scroller intentionally does not support gradual or pixel-level resizing. Ins
 
 This design choice is philosophical more than technical. Rather than requiring users to repeatedly adjust window borders and fine-tune layouts manually, Fit Scroller encourages transitions between a small set of practical dimensions. The layout then automatically adapts surrounding windows while preserving the existing window order.
 ### Maximize Practical Density
-By default, the layout attempts to display as many windows as possible while keeping every visible window at a practical dimension.
+By default, the layout attempts to fill the visible space while keeping every visible window at a practical dimension and preserving the logical window order.
 ### Scrolling Instead of Shrinking
 When additional windows can no longer fit while respecting the allowed dimensions, the layout introduces scrolling rather than continuously shrinking existing windows.
 
@@ -106,9 +109,9 @@ Example:
 
 When a workspace is displayed on a given display, Fit Scroller uses that display's configuration. If no display-specific configuration exists, the default configuration is used.
 ### Automatic Fitting
-When windows are opened, closed or moved, the layout automatically adjusts window dimensions and positions to make the best use of the available space.
+When the set or order of windows changes, the layout automatically adjusts window dimensions and positions to make the best use of the available space.
 
-Fit Scroller preserves the existing window order and never rearranges windows automatically. Instead, it selects the most appropriate practical dimensions for each window in order to keep as many windows visible as possible while respecting the configured dimension constraints.
+Fit Scroller preserves the logical window order. Instead, it selects practical dimensions and positions for each window in order to fill the visible space while respecting the configured dimension constraints.
 ### Viewport
 The visible screen represents a viewport into the workspace.
 
@@ -118,7 +121,7 @@ When no additional windows can fit while preserving those dimensions, the worksp
 ### Scrolling
 Once the viewport is full, newly opened windows are placed outside the visible area.
 
-Navigation then behaves similarly to a scrolling tiling manager: moving focus can automatically bring hidden windows into view while preserving the existing window order.
+Navigation then behaves similarly to a scrolling tiling manager: moving focus can automatically bring hidden windows into view while preserving window dimensions, positions and logical order.
 ### Scroll Direction
 Each display defines a scroll direction.
 
@@ -183,9 +186,9 @@ Here is an example of behavior for the following allowed dimensions configuratio
 
 ```text
 +-----+-----+
-|     |  B  |
-|  A  +-----+
-|     |  C  |
+|  A  |     |
+|-----+  C  |
+|  B  |     |
 +-----+-----+
 ```
 
@@ -193,9 +196,9 @@ Here is an example of behavior for the following allowed dimensions configuratio
 
 ```text
 +-----+-----+
-|  A  |  B  |
+|  A  |  C  |
 |-----+-----|
-|  C  |  D  |
+|  B  |  D  |
 +-----+-----+
 ```
 
@@ -207,25 +210,25 @@ scrolls to the newly focused window.
 ```text
       +-------------+ 
 +-----|+-----+-----+|
-|  A  ||  B  |     ||
+|  A  ||  C  |     ||
 |-----|+-----|  E  ||
-|  C  ||  D  |     ||
+|  B  ||  D  |     ||
 +-----|+-----+-----+|
       +-------------+
 ```
-(A and C not visible, B, D and E visible)
+(A and B not visible, C, D and E visible)
 
 Then
 
 ```text
       +-------------+
 +-----|+-----+-----+|
-|  A  ||  B  |  E  ||
+|  A  ||  C  |  E  ||
 |-----|+-----|-----||
-|  C  ||  D  |  F  ||
+|  B  ||  D  |  F  ||
 +-----|+-----+-----+|
       +-------------+
 ```
-(A and C not visible, B, D, E and F visible)
+(A and B not visible, C, D, E and F visible)
 
 The viewport scrolls through the workspace similarly to a scrolling tiling manager.

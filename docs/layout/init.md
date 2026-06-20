@@ -16,7 +16,7 @@ loading concerns do not spread into the core layout modules.
 
 In Phase 1, `init.lua` must:
 
-- require or load the Hyprland adapter module;
+- load the Hyprland adapter module relative to `init.lua`;
 - register the layout as `fit-scroller`;
 - expose a `recalculate(ctx)` callback;
 - expose a `layout_msg(ctx, msg)` callback;
@@ -28,6 +28,11 @@ It must not:
 - maintain workspace state;
 - parse Fit Scroller commands itself;
 - know about target identity, dimensions, traversal or solver details.
+
+Starting with focus-following integration, `init.lua` also owns global Hyprland
+Lua event subscription setup. This remains a thin integration role: event
+callbacks must only dispatch Fit Scroller layout messages and must not compute
+state or geometry themselves.
 
 ## Hyprland Contract
 
@@ -44,6 +49,61 @@ hl.layout.register("fit-scroller", {
     end,
 })
 ```
+
+Hyprland `0.55.4` also exposes focus events through:
+
+```lua
+hl.on("window.active", function(window, reason)
+end)
+```
+
+Fit Scroller should subscribe to this event once during initialization and ask
+the active Fit Scroller layout to run `follow`:
+
+```lua
+hl.on("window.active", function(window)
+    if window and window.layout and window.layout.name == "lua:fit-scroller" then
+        hl.dispatch(hl.dsp.layout("follow"))
+    end
+end)
+```
+
+The callback must be defensive. If `window.layout` is missing or does not name
+Fit Scroller, it should do nothing.
+
+## Module Loading
+
+`init.lua` must not depend on Hyprland's current working directory or on a
+user-specific `package.path`.
+
+Hyprland appears to resolve Lua imports relative to the Hyprland configuration
+environment rather than relative to the loaded layout file. A plain
+`require("hyprland_adapter")` would therefore force users to place Fit
+Scroller modules in a specific configuration directory such as
+`~/.config/hypr/layout`, making installation fragile.
+
+Instead, `init.lua` should resolve its own source path and load sibling modules
+relative to that path:
+
+```text
+layout/init.lua
+layout/hyprland_adapter.lua
+```
+
+The Phase 1 implementation uses Lua's `debug.getinfo` to find the current
+file and `loadfile` to load `hyprland_adapter.lua` from the same directory.
+This keeps the layout directory relocatable as long as the files stay together.
+
+Runtime assumption:
+
+- Hyprland's Lua environment exposes `debug.getinfo`;
+- Hyprland's Lua environment exposes `loadfile`;
+- `debug.getinfo(1, "S").source` returns a file path prefixed with `@`.
+
+If any of these assumptions fail in Hyprland `0.55`, the fallback strategy
+should be explicit, such as shipping a bundled single-file layout or
+documenting an installation path constraint. Do not silently reintroduce a
+`require`-based dependency on the Hyprland configuration directory.
 
 ## Phase 1 Behavior
 
@@ -87,6 +147,9 @@ behavior should be added to:
 - `commands.lua` for command parsing;
 - `state.lua` and `target_sync.lua` for workspace state;
 - `solver.lua` for final layout computation.
+
+The exception is global Hyprland event registration. Event registration belongs
+in `init.lua` because it installs the layout into Hyprland's Lua runtime.
 
 ## Phase 1 Acceptance Criteria
 

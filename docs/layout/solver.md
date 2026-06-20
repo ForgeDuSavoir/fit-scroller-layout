@@ -18,12 +18,12 @@ In Phase 3, `solver.lua` must:
 - consume ordered target descriptors;
 - consume normalized display configuration;
 - consume per-window dimension modes;
-- generate candidate layouts using only allowed dimensions;
+- generate order-preserving layouts using only allowed dimensions;
 - preserve logical window order;
 - honor forced dimensions;
 - reject candidates that overlap on the cross axis;
 - allow overflow only on the scroll axis;
-- rank candidates deterministically;
+- implement `tiling_mode = "split"` and `tiling_mode = "ajuste"`;
 - return placements as host-independent rectangles.
 
 It must not:
@@ -32,6 +32,9 @@ It must not:
 - read raw Hyprland objects;
 - mutate workspace state directly;
 - change focus;
+- read focused id;
+- read viewport offset;
+- decide whether the focused window is visible;
 - implement viewport reveal. Focus reveal belongs to Phase 4.
 
 ## Inputs
@@ -49,11 +52,11 @@ SolverInput = {
         A = { kind = "auto" },
         B = { kind = "forced", key = "0.5x1.0" },
     },
-    focused_id = "A",
-    viewport = { x = 0, y = 0, w = 1, h = 1 },
-    viewport_offset = 0,
 }
 ```
+
+The solver input must not include focus or viewport state. If adapter code has
+that information, it must not pass it to the solver.
 
 ## Output
 
@@ -68,27 +71,21 @@ Layout = {
         A = { key = "0.5x1.0", w = 0.5, h = 1.0 },
     },
     workspace_extent = 1.0,
-    viewport_offset = 0,
-    ranking = {
-        visible_count = 2,
-        min_visible_area = 0.5,
-        workspace_extent = 1.0,
-    },
 }
 ```
 
-Phase 3 may keep `viewport_offset` unchanged. Phase 4 owns focus reveal and
-offset adjustment.
+The solver output is world-space geometry only. Phase 4 owns viewport reveal
+and offset adjustment.
 
 ## Candidate Model
 
-A candidate assigns:
+A layout assigns:
 
 - one allowed dimension to each target;
 - one logical rectangle to each target;
 - a workspace extent along the scroll axis.
 
-Every candidate must satisfy:
+Every layout must satisfy:
 
 - every target has exactly one allowed dimension;
 - forced dimensions are preserved;
@@ -97,19 +94,98 @@ Every candidate must satisfy:
 - overflow exists only on the scroll axis;
 - every rectangle fits on the cross axis.
 
-## Candidate Generation
+## Trigger Contract
+
+The solver runs only when structure changes:
+
+- target count changes;
+- logical order changes;
+- a target's dimension mode changes.
+
+The solver must not run for:
+
+- focus-only changes;
+- viewport offset changes;
+- future manual scroll input.
+
+When both a structure change and a focus change happen in the same user-visible
+operation, the adapter must run the solver first and the viewport second.
+
+## Order Mode
+
+Version 1 uses order-mode tiling only.
+
+For `scroll_direction = "right"`, order is assigned top to bottom inside a
+column, then left to right across columns. The same rule is transformed for
+the other directions by `traversal.lua`.
+
+Spatial placement, where windows are positioned by directional adjacency, is a
+future version concern and must not be mixed into the V1 solver.
+
+## `split` Tiling Mode
+
+`split` is the default incremental strategy.
 
 Recommended V1 strategy:
 
 1. Normalize the configured direction to canonical `right`.
-2. Generate candidate rows from allowed dimensions.
-3. Pack targets in logical order.
-4. Start a new scroll-axis region when the next target cannot fit.
-5. Preserve forced dimensions before selecting auto dimensions.
-6. Transform the selected candidate back to the configured direction.
+2. Build ordered slots.
+3. Start with one `1.0 x 1.0` slot when one target exists.
+4. When another target is needed, find the largest existing auto slot.
+5. Check whether that slot can be split into two allowed dimensions that
+   exactly cover the original slot.
+6. If it can, replace the slot with the two split slots in traversal order.
+7. If it cannot, switch to `ajuste` for the current target count.
+8. If all visible slots are already at minimum practical scroll-axis size and
+   more targets are needed, append a slot in the scroll direction. The appended
+   slot uses the smallest allowed scroll-axis dimension that minimizes
+   additional scroll and the largest allowed cross-axis dimension that fills
+   visible space.
+9. Assign windows to slots in logical order.
+10. Transform the canonical layout back to the configured direction.
 
-This keeps candidate generation understandable and lets `traversal.lua`
-handle direction-specific placement.
+For the common configuration:
+
+```lua
+allowed_dimensions = {
+    { 1.0, 1.0 },
+    { 0.5, 1.0 },
+    { 0.5, 0.5 },
+}
+scroll_direction = "right"
+tiling_mode = "split"
+```
+
+the canonical sequence is:
+
+```text
+1: A
+2: A | B
+3: A/B | C
+4: A/B | C/D
+5: A/B | C/D | E
+6: A/B | C/D | E/F
+```
+
+where `A/B` means `A` above `B` in the same column.
+
+## `ajuste` Tiling Mode
+
+`ajuste` directly searches for an order-preserving layout for the current
+target count.
+
+Candidate ranking for `ajuste`:
+
+1. all windows use the same dimension, if possible;
+2. otherwise, smallest difference between window areas;
+3. then smallest workspace extent along the scroll axis;
+4. then stable canonical position order.
+
+All candidates must still preserve logical order and use only configured
+allowed dimensions.
+
+`split` may fall back to this same strategy when no valid largest-slot split
+exists.
 
 ## Forced Dimensions
 
@@ -121,35 +197,12 @@ if doing so reduces the number of other visible windows.
 If a forced dimension cannot fit on the cross axis, the solver returns an
 error. The caller must preserve the previous valid state and layout.
 
-## Ranking
-
-Candidates are ranked lexicographically:
-
-1. highest number of fully visible windows in the viewport containing the
-   focused window;
-2. largest minimum visible window area;
-3. smallest workspace extent along the scroll axis;
-4. stable canonical position order.
-
-### Visible Count
-
-Only fully visible windows count.
-
-Phase 3 may evaluate visibility with the current `viewport_offset`. Phase 4
-will adjust the offset to reveal focus before final placement.
-
-### Minimum Visible Window Area
-
-For candidates with the same visible count, compute the area of every fully
-visible window and compare the smallest such area.
-
-The candidate whose smallest fully visible window is largest wins.
-
-### Workspace Extent
+## Workspace Extent
 
 Workspace extent is measured only on the scroll axis.
 
-Smaller extent wins after visible count and minimum visible area.
+Smaller extent wins only after the tiling-mode-specific requirements are
+satisfied.
 
 ### Stable Position Order
 
@@ -162,10 +215,9 @@ Recommended functions:
 
 ```lua
 solver.solve(input)
-solver.generate_candidates(input)
+solver.generate_layouts(input)
 solver.validate_candidate(candidate, input)
-solver.rank_candidate(candidate, input)
-solver.compare_candidates(a, b, input)
+solver.compare_ajuste_candidates(a, b, input)
 ```
 
 ### `solve(input)`
@@ -197,8 +249,9 @@ Phase 3 does not implement:
 - Auto windows receive only configured allowed dimensions.
 - Forced windows keep their forced dimensions when valid.
 - Invalid forced dimensions return errors.
-- Candidate ranking follows visible count, minimum visible area, extent and
-  stable order.
+- `split` follows largest-slot splitting before falling back to `ajuste`.
+- `ajuste` prefers equal dimensions, then smallest size differences, then
+  smallest scroll extent.
 - Returned placements preserve logical order.
 - Overflow occurs only on the configured scroll axis.
 
@@ -216,12 +269,13 @@ valid layout for every target, or an error that the adapter can recover from.
 - `config` is present and already normalized;
 - `config.allowed_dimensions` is non-empty;
 - `config.scroll_direction` is supported;
+- `config.tiling_mode` is `split` or `ajuste`;
 - `targets` is a list;
 - every target has a stable id;
 - target ids are unique;
 - every forced dimension key exists in `config.dimensions_by_key`;
-- `viewport` has positive width and height;
-- `viewport_offset` is a finite number greater than or equal to `0`.
+- no focus id, viewport rectangle or viewport offset is required to compute
+  geometry.
 
 Invalid input should produce a structured or readable error and no layout.
 
@@ -233,8 +287,7 @@ Successful solver output must include:
 - one dimension for every target id;
 - no placements for unknown ids;
 - a finite `workspace_extent`;
-- a finite `viewport_offset`;
-- ranking data useful for diagnostics.
+- diagnostic data useful for explaining solver decisions.
 
 If any placement is missing, the solver must return an error instead of
 leaving the adapter to discover the issue during placement.
@@ -248,10 +301,9 @@ The solver should explicitly handle:
 - many targets with all auto dimensions;
 - all windows forced to large dimensions;
 - mixed forced and auto dimensions;
-- focused id missing from targets;
-- viewport offset beyond workspace extent;
-- equivalent candidates that require deterministic tie-breaking;
+- equivalent layouts that require deterministic tie-breaking;
 - directions `right`, `left`, `down` and `up`.
+- focus and viewport values changing outside the solver.
 
 For zero targets, a successful empty layout is acceptable:
 
@@ -260,7 +312,6 @@ For zero targets, a successful empty layout is acceptable:
     placements_by_id = {},
     dimensions_by_id = {},
     workspace_extent = 0,
-    viewport_offset = 0,
 }
 ```
 
@@ -293,6 +344,57 @@ derived from:
 
 Tie-breaking must be stable for identical input.
 
+## Solver and Viewport Independence Tests
+
+Phase 5 must add regression tests proving that solver output depends only on:
+
+- normalized configuration;
+- ordered targets;
+- forced dimension modes.
+
+Changing any of the following must not change solver output:
+
+- focused id;
+- current viewport offset;
+- whether a target is currently visible;
+- pending viewport reveal state.
+
+The adapter should enforce this by not passing focus or viewport state to
+`solver.solve(input)`.
+
+## Tiling Mode Tests
+
+`split` tests must cover the documented order-mode sequence for at least A
+through H with:
+
+```lua
+allowed_dimensions = {
+    { 1.0, 1.0 },
+    { 0.5, 1.0 },
+    { 0.5, 0.5 },
+}
+scroll_direction = "right"
+tiling_mode = "split"
+```
+
+Expected canonical order:
+
+```text
+A/B | C/D | E/F | G/H
+```
+
+Odd counts must use the smallest allowed scroll-axis size and the largest
+allowed cross-axis size for the appended slot when no further split is
+possible.
+
+`ajuste` tests must prove:
+
+- equal dimensions are preferred when valid;
+- when equality is impossible, the smallest difference between window areas is
+  preferred;
+- after mode-specific priorities, smaller scroll extent wins;
+- output remains deterministic when candidates tie.
+
 ## Diagnostics
 
 Phase 5 should make solver failures diagnosable without exposing Hyprland
@@ -321,10 +423,17 @@ Solver tests should cover:
 - missing forced dimension key rejected;
 - forced dimension too large for cross axis rejected;
 - many equivalent candidates produce stable output;
-- candidate ranking prioritizes visible count;
-- candidate ranking prioritizes minimum visible area after visible count;
-- candidate ranking prioritizes smaller extent after area;
+- `split` opens A, B, C, D, E, F, G, H according to the documented split
+  sequence;
+- `split` odd counts append the smallest scroll-axis slot that fills the
+  cross axis as much as allowed;
+- `split` falls back to `ajuste` when the largest slot cannot be split;
+- `ajuste` prioritizes equal dimensions;
+- `ajuste` prioritizes smallest size differences after equality fails;
+- both modes prioritize smaller scroll extent after their mode-specific rules;
 - all four directions preserve logical order;
+- focus changes do not change solver output;
+- viewport offset changes do not change solver output;
 - no successful layout has missing placements.
 
 ## Phase 5 Acceptance Criteria
@@ -333,5 +442,7 @@ Solver tests should cover:
 - Successful output contains complete placements and dimensions.
 - Candidate ordering is deterministic and independent from table iteration.
 - Forced-dimension failures are readable and recoverable by the adapter.
+- Solver output is independent from focus and viewport state.
+- `split` and `ajuste` behavior match the updated specification.
 - Edge-case tests cover empty, single-window, forced, mixed and directional
   layouts.

@@ -20,7 +20,7 @@ In Phase 3, `geometry.lua` must:
 - compare dimensions deterministically;
 - convert configured fractions to logical rectangles;
 - check containment and overlap;
-- compute visibility inside a viewport;
+- compute rectangle intersections for viewport reveal and diagnostics;
 - provide deterministic rounding helpers for adapter use.
 
 It must not:
@@ -28,7 +28,7 @@ It must not:
 - read `ctx`, `target` or Hyprland area objects;
 - know about window order;
 - decide traversal direction;
-- rank full layout candidates.
+- choose layout dimensions or positions.
 
 ## Core Types
 
@@ -96,13 +96,14 @@ Compares dimensions using the same ordering as `toggle dimension`:
 3. taller first when width is equal.
 
 This comparison is for deterministic ordering only. Layout selection still uses
-the solver ranking rules.
+the solver's tiling-mode rules.
 
 ### `is_fully_visible(rect, viewport)`
 
 Returns true when the full rectangle is inside the viewport.
 
-This is used by the solver when ranking candidates by visible window count.
+This may be used by viewport tests or diagnostics. The V1 solver must not use
+current viewport visibility to choose dimensions or positions.
 
 ### `round_rect(rect, pixel_viewport)`
 

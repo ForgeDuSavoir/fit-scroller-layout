@@ -22,7 +22,7 @@ the same time.
 Fit Scroller must:
 
 - keep windows at dimensions explicitly considered practical by the user;
-- maximize the number of windows visible in the viewport;
+- fill the visible space as much as possible with configured dimensions;
 - preserve a stable window order;
 - introduce scrolling when all windows cannot fit at practical dimensions;
 - provide discrete, predictable resizing through allowed dimensions;
@@ -89,8 +89,25 @@ The direction determines which side receives later workspace content.
 
 ### Layout
 
-The dimension and position assigned to every tiled window, together with the
-current viewport offset.
+The dimension and world-space position assigned to every tiled window.
+
+Layout geometry is independent from the current viewport offset.
+
+### Viewport offset
+
+The scroll translation applied when displaying a layout.
+
+Viewport offset is not part of layout solving. It is applied after a layout has
+already been computed.
+
+### Tiling mode
+
+The strategy used by the solver to assign dimensions and world-space
+positions.
+
+Version 1 supports an order-based tiling model. Spatial tiling, where
+placement is chosen from directional adjacency such as left, right, up and
+down, is reserved for a future version.
 
 ## Configuration
 
@@ -109,7 +126,10 @@ is used.
 ### Required values
 
 - `allowed_dimensions`: a non-empty set of allowed dimensions;
-- `scroll_direction`: one of `right`, `left`, `down` or `up`.
+- `scroll_direction`: one of `right`, `left`, `down` or `up`;
+- `tiling_mode`: one of `split` or `ajuste`;
+- `insert_mode`: one of `last`, `first`, `view`, `after_focused` or
+  `before_focused`.
 
 These required values must be present in the effective configuration for every
 display used by Fit Scroller.
@@ -127,6 +147,40 @@ Duplicate dimensions are invalid.
 The order of `allowed_dimensions` has no semantic meaning. It must not affect
 layout selection, dimension sizing or tie-breaking.
 
+### Tiling mode values
+
+`tiling_mode = "split"`:
+
+- prefer incremental splitting of the largest existing slot;
+- if the largest slot cannot be split into two configured allowed dimensions,
+  fall back to the `ajuste` strategy.
+
+`tiling_mode = "ajuste"`:
+
+- choose dimensions that make window sizes as equivalent as possible;
+- when perfect equivalence is impossible, choose the valid layout with the
+  smallest size differences while still preserving order, filling visible
+  space and minimizing scroll.
+
+### Insert mode values
+
+`insert_mode` controls where newly created tiled windows are inserted in the
+logical window order.
+
+It is not a solver option. The solver only consumes the resulting order.
+
+Supported values:
+
+- `last`: insert new windows at the end of the window order;
+- `first`: insert new windows at the beginning of the window order;
+- `view`: insert new windows after the last currently visible window;
+- `after_focused`: insert new windows immediately after the focused window;
+- `before_focused`: insert new windows immediately before the focused window.
+
+If a mode-specific anchor is unavailable, insertion falls back to `last`.
+
+`view` is the default V1 behavior.
+
 ### Invalid configuration
 
 Invalid configuration must be rejected with a diagnostic that identifies the
@@ -141,12 +195,32 @@ configuration.
 
 ### Insertion
 
-When a tiled window is created, it is inserted immediately after the currently
-focused tiled window.
-
-If no tiled window is focused, it is appended to the window order.
+When a tiled window is created, it is inserted according to `insert_mode`.
 
 The new window starts in auto dimension mode.
+
+`insert_mode = "last"`:
+
+- append the new window to the end of the logical window order.
+
+`insert_mode = "first"`:
+
+- insert the new window at the beginning of the logical window order.
+
+`insert_mode = "view"`:
+
+- insert the new window immediately after the last currently visible window;
+- if no visible window is known, append it to the end.
+
+`insert_mode = "after_focused"`:
+
+- insert the new window immediately after the currently focused tiled window;
+- if no focused tiled window is known, append it to the end.
+
+`insert_mode = "before_focused"`:
+
+- insert the new window immediately before the currently focused tiled window;
+- if no focused tiled window is known, append it to the end.
 
 After insertion, the layout is recomputed and the viewport must reveal the new
 window.
@@ -209,63 +283,141 @@ The configured direction defines both:
 - the direction in which windows are placed before scrolling is required; and
 - the direction in which the workspace extends once scrolling is required.
 
-For a `right` direction, windows progress left to right first, then top to
-bottom. With four windows, the order is:
+For a `right` direction, windows progress top to bottom first, then left to
+right. With four windows, the order is:
 
 ```text
 +---+---+
-| A | B |
+| A | C |
 +---+---+
-| C | D |
+| B | D |
 +---+---+
 ```
 
 The opposite directions mirror that traversal:
 
-- `left`: right to left first, then top to bottom;
-- `down`: top to bottom first, then left to right;
-- `up`: bottom to top first, then left to right.
+- `left`: top to bottom first, then right to left;
+- `down`: left to right first, then top to bottom;
+- `up`: left to right first, then bottom to top.
 
 The canonical traversal must preserve the logical window order for every
 configured direction.
 
-### Candidate layouts
+### Solver and viewport independence
 
-A candidate layout assigns an allowed dimension and a position to every
-window while satisfying all general invariants.
+The solver and viewport are separate systems.
 
-Forced dimensions constrain candidate generation and cannot be changed by the
-layout solver.
+The solver decides:
 
-### Layout selection
+- window dimensions;
+- world-space positions;
+- workspace extent.
 
-Candidate layouts are ranked lexicographically by:
+The solver must not read or depend on:
 
-1. highest number of windows fully visible in the viewport containing the
-   focused window;
-2. largest minimum visible window area, while keeping the same number of
-   windows visible;
-3. smallest workspace extent along the scroll axis;
-4. stable canonical position order.
+- the focused window;
+- the current viewport offset;
+- whether a window is currently visible.
 
-The first candidate in this ordering is selected.
+The viewport decides:
 
-This ranking formalizes the layout strategy:
+- the scroll offset used to reveal a focused window;
+- the scroll offset used for manual scrolling in future versions.
 
-- fit as many windows as possible in the viewport;
-- among layouts with the same visible window count, avoid sacrificing one
-  visible window to make other visible windows larger;
-- use only dimensions from the configured allowed set.
+The viewport must not change:
 
-Dimension size is derived from the resulting geometry, not from the position
-of a dimension in the configuration.
+- window dimensions;
+- world-space positions;
+- window order.
 
-The size metric for visible windows is the area of each visible window's
-logical rectangle. When several candidates show the same number of windows,
-Fit Scroller compares the smallest visible window area in each candidate and
-keeps the candidate whose smallest visible window is largest.
+The solver has priority when both systems need to run. For example, opening a
+window changes the window count and can also change focus. Fit Scroller must
+first compute the new layout, then reveal the newly focused window using that
+layout.
+
+### Solver triggers
+
+The solver runs only when layout structure changes:
+
+- a tiled window is added;
+- a tiled window is removed;
+- a window's dimension mode changes between auto and forced, or between forced
+  dimensions;
+- the logical window order changes.
+
+Focus changes and viewport movement must not trigger the solver.
+
+### Viewport triggers
+
+The viewport runs only when scroll offset should change:
+
+- focus changes;
+- manual scroll input occurs in a future version.
+
+Window insertion or removal may be followed by a viewport reveal because focus
+changed, but that viewport update is a separate step after solver completion.
+
+### Solver philosophy
+
+The solver follows these priorities:
+
+1. fill the visible space;
+2. preserve logical window order;
+3. keep scroll as small as possible while respecting the previous priorities.
+
+The solver must use only configured allowed dimensions.
+
+### `split` tiling mode
+
+`split` is an incremental order-preserving strategy.
+
+The solver maintains ordered slots. Each slot has a dimension and a world-space
+position. Windows are assigned to slots in logical order.
+
+Algorithm:
+
+1. Start with one full viewport slot.
+2. If more slots are needed, find the largest existing slot.
+3. Check whether that slot can be replaced by two slots whose dimensions are
+   both configured allowed dimensions and whose union exactly fills the
+   original slot.
+4. If the split is possible, replace the original slot with the two new slots
+   and preserve traversal order.
+5. If the split is not possible, use the `ajuste` strategy for the required
+   window count.
+6. If all existing visible slots are minimum practical size and more windows
+   are needed, append new slots along the scroll axis. The appended slot uses
+   the smallest allowed scroll-axis size that minimizes additional scroll and
+   the largest allowed cross-axis size that fills visible space.
+
+For horizontal scrolling, this means a new overflow column should be as narrow
+as allowed and as tall as allowed.
+
+### `ajuste` tiling mode
+
+`ajuste` computes a valid order-preserving layout directly for the current
+window count.
+
+The solver should:
+
+1. generate valid order-preserving layouts using only allowed dimensions;
+2. prefer layouts where all windows have the same dimension;
+3. when equal dimensions are impossible, prefer the layout with the smallest
+   difference between window areas;
+4. then prefer the smallest workspace extent along the scroll axis;
+5. use stable canonical position order only as a final tie-breaker.
+
+`ajuste` does not first attempt the incremental largest-slot split.
 
 ### Reflow stability
+
+Fit Scroller separates layout geometry from viewport translation:
+
+- layout geometry assigns each window a stable world-space rectangle;
+- viewport movement only translates those rectangles before placement.
+
+Changing focus or scrolling the viewport must not change selected dimensions
+or world-space positions.
 
 Layout recomputation must not change the viewport offset when:
 
@@ -274,7 +426,8 @@ Layout recomputation must not change the viewport offset when:
 
 Fit Scroller does not guarantee that an auto window keeps its previous
 dimension after a lifecycle or configuration change. Stability may be used as
-a final tie-breaker, but it must not reduce visible window count.
+a final tie-breaker, but it must not override filling visible space, preserving
+order or minimizing scroll.
 
 ## Forced Dimensions
 
@@ -347,6 +500,8 @@ direction, the command has no effect.
 After focus changes, the viewport reveals the focused window according to the
 normal focus reveal rules.
 
+Focus changes do not trigger layout solving.
+
 ### Manual scrolling
 
 Manual scrolling is not part of version 1.
@@ -361,20 +516,20 @@ remain clamped to the workspace bounds.
 ### Direction semantics
 
 For `right`, logical content starts at the left edge, places windows toward
-the right edge, then continues downward before extending right when scrolling
-is required.
+the bottom edge within the current column, then continues rightward before
+extending right when scrolling is required.
 
 For `left`, logical content starts at the right edge, places windows toward
-the left edge, then continues downward before extending left when scrolling is
-required.
+the bottom edge within the current column, then continues leftward before
+extending left when scrolling is required.
 
 For `down`, logical content starts at the top edge, places windows toward the
-bottom edge, then continues rightward before extending down when scrolling is
-required.
+right edge within the current row, then continues downward before extending
+down when scrolling is required.
 
 For `up`, logical content starts at the bottom edge, places windows toward the
-top edge, then continues rightward before extending up when scrolling is
-required.
+right edge within the current row, then continues upward before extending up
+when scrolling is required.
 
 Changing the configured direction recomputes positions while preserving window
 order and the focused window.
@@ -439,8 +594,10 @@ Version 1 exposes the following user commands:
 
 Commands that target a missing predecessor or successor have no effect.
 
-Commands that change focus, order or dimension mode trigger layout
-recomputation and must leave the focused window visible.
+Commands that change order or dimension mode trigger layout recomputation.
+
+Commands that change focus trigger viewport reveal only. They must not trigger
+layout recomputation.
 
 ## Error Handling
 
@@ -463,6 +620,7 @@ allowed_dimensions = {
     { 0.5, 0.5 },
 }
 scroll_direction = "right"
+tiling_mode = "split"
 ```
 
 ### Basic fitting
@@ -474,9 +632,20 @@ scroll_direction = "right"
 - Opening a fifth window creates horizontal overflow instead of assigning an
   unconfigured dimension.
 
-The exact positions for two to four windows follow the configured direction
-semantics. With `scroll_direction = "right"`, windows progress left to right
-first, then top to bottom.
+The exact positions for two to four windows follow order-mode direction
+semantics. With `scroll_direction = "right"`, windows progress top to bottom
+inside a column, then left to right.
+
+Expected order-preserving sequence:
+
+```text
+1 window:  A uses 1.0 x 1.0
+2 windows: A and B use 0.5 x 1.0
+3 windows: A and B split the first column; C uses the second column
+4 windows: A/B and C/D form two half-width columns
+5 windows: E is appended as the next narrow full-height column
+6 windows: E/F split that appended column
+```
 
 ### Focus reveal
 
@@ -504,8 +673,9 @@ remaining content.
 
 ### Determinism
 
-Given identical configuration, window order, dimension modes, focus and
-viewport size, repeated layout computation produces identical geometry.
+Given identical configuration, window order and dimension modes, repeated
+layout computation produces identical geometry regardless of focus or viewport
+offset.
 
 ## Decisions Required for Version 1
 

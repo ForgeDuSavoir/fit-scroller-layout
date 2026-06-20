@@ -210,6 +210,23 @@ Resolution order:
 The chosen key must be documented once Hyprland `0.55` runtime behavior is
 observed.
 
+### Phase 2 Provisional Integration
+
+Until Hyprland `0.55` runtime inspection confirms the exact custom layout
+fields, the Phase 2 implementation uses explicit provisional fallbacks:
+
+- target id prefers `target.window.stable_id`, then `target.index`, then a
+  synthetic index-based id for smoke tests;
+- active focus is read from `target.window.active`;
+- workspace key probes common `ctx.workspace` and monitor workspace shapes,
+  then falls back to `global`;
+- display id probes common monitor/output fields, then falls back to
+  `default`.
+
+These fallbacks are acceptable for early integration and local smoke tests, but
+they are not final Hyprland API decisions. Runtime observations should replace
+or confirm them before hardening state persistence and focus behavior.
+
 ### Command Dispatch
 
 In Phase 2, `layout_msg(ctx, msg)` delegates supported command parsing to
@@ -228,6 +245,21 @@ layout_msg(ctx, msg)
 
 Commands still do not place windows directly. Any resulting placement happens
 through the next `recalculate(ctx)` call.
+
+### Insert Context
+
+When synchronizing targets, the adapter must pass the effective
+`config.insert_mode` to `target_sync.lua`.
+
+For `insert_mode = "view"`, the adapter is responsible for computing the last
+currently visible target id before synchronization. It should use:
+
+- `state.last_layout`;
+- `state.viewport_offset`;
+- the current scroll direction and viewport size.
+
+`target_sync.lua` receives this as host-independent metadata and does not
+inspect Hyprland geometry directly.
 
 ### Temporary Placement With Logical Order
 
@@ -262,16 +294,26 @@ the shape accepted by `target:place(area)`.
 Expected Phase 3 flow:
 
 ```text
-recalculate(ctx)
+structural recalculate(ctx)
     -> read display id
     -> resolve config for display
     -> collect target descriptors
     -> get workspace state
     -> synchronize targets
     -> call solver.solve(...)
+    -> store state.last_layout
     -> convert placements to Hyprland areas
     -> call target:place(area)
 ```
+
+The adapter must not call the solver for focus-only or viewport-only updates.
+Those updates reuse `state.last_layout`.
+
+Hyprland may call `recalculate(ctx)` after a successful `layout_msg(ctx, msg)`,
+including after viewport-only messages such as `follow`. The adapter must
+therefore preserve the intent of the triggering message. If the pending intent
+is viewport-only, the next placement pass must reuse `state.last_layout`
+instead of calling `solver.solve(...)`.
 
 ### Applying Placements
 
@@ -303,6 +345,19 @@ The core rectangle type is:
 The exact Hyprland placement area shape is still an integration detail. Phase 3
 must verify whether `target:place` accepts plain Lua tables or requires objects
 created by Hyprland helpers.
+
+The current Phase 3 implementation uses a provisional adapter conversion:
+
+- the solver returns normalized logical rectangles;
+- the adapter expects `ctx.area` to expose numeric `x`, `y`, `w`/`width` and
+  `h`/`height` fields;
+- the adapter converts logical rectangles to rounded pixel rectangle tables;
+- the adapter passes those tables to `target:place`.
+
+If `ctx.area` does not expose numeric fields, the adapter returns a readable
+error instead of falling back to the Phase 2 columns layout. This keeps the
+unverified integration point visible and prevents solver behavior from being
+silently bypassed.
 
 Until verified, implementation should prefer the safest Hyprland-supported
 path:
@@ -340,6 +395,17 @@ The adapter remains the only module allowed to:
 - call a Hyprland focus mechanism;
 - convert viewport-adjusted logical rectangles into Hyprland placement areas.
 
+Hyprland `0.55.4` source inspection confirms that `target.window.address` is
+available as `0x...`. The adapter should build an `address:` selector and use
+the internal Lua API:
+
+```lua
+hl.dispatch(hl.dsp.focus({ window = "address:" .. descriptor.window.address }))
+```
+
+The adapter must not use `hyprctl`, `os.execute` or `io.popen` from
+`layout_msg(ctx, msg)` or `recalculate(ctx)`.
+
 ## Focus Command Flow
 
 Expected `layout_msg(ctx, msg)` flow for focus commands:
@@ -356,8 +422,9 @@ layout_msg(ctx, "focus next")
 `commands.lua` chooses the logical target id. The adapter performs the
 Hyprland-specific focus action.
 
-If Hyprland focus control is unavailable from the custom layout environment,
-the adapter must return a readable unsupported error and leave state unchanged.
+If Hyprland focus control is unavailable from the custom layout environment in
+a future version, the adapter must return a readable unsupported error and
+leave state unchanged.
 
 Recommended error:
 
@@ -375,35 +442,71 @@ descriptors_by_id[id] = descriptor
 
 To focus a target, prefer mechanisms in this order:
 
-1. a direct focus method exposed by the target or window object;
-2. a Hyprland dispatcher callable from Lua with a stable window address;
+1. `descriptor.window.address` converted to `address:<address>` and passed to
+   `hl.dsp.focus({ window = selector })`;
+2. a future direct focus method exposed by the target or window object;
 3. no implementation, with a readable unsupported-command error.
 
 Using Hyprland's default `cyclenext` is not sufficient because Fit Scroller
 focus commands follow Fit Scroller's logical order, not Hyprland's internal
 focus order.
 
-## Recalculate Flow With Viewport
-
-Expected Phase 4 recalculation:
+If no valid window address or direct focus method is available, focus commands
+return a readable error such as:
 
 ```text
-recalculate(ctx)
+fit-scroller: focus commands are unsupported by the current Hyprland adapter
+```
+
+## Structural Flow With Viewport
+
+Expected structural flow:
+
+```text
+structural event
     -> read display id
     -> resolve config for display
     -> collect target descriptors
     -> get workspace state
     -> synchronize targets and focused id
     -> call solver.solve(...)
-    -> find the focused placement
-    -> call viewport.reveal(...)
-    -> update state.viewport_offset
+    -> update state.last_layout
+    -> optionally clamp state.viewport_offset to new workspace extent
     -> convert placements using viewport_offset
     -> call target:place(area)
 ```
 
-If no target is focused, the adapter should still clamp the existing offset
-against the new workspace extent before placement.
+If no target is focused, the adapter should clamp the existing offset against
+the new workspace extent before placement.
+
+## Focus/Viewport Flow
+
+Expected focus-only flow:
+
+```text
+focus event
+    -> collect target descriptors
+    -> update state.focused_id from active target
+    -> read state.last_layout
+    -> find the focused placement
+    -> call viewport.reveal(...)
+    -> update state.viewport_offset
+    -> reapply state.last_layout using viewport_offset
+```
+
+This flow must not call `solver.solve(...)`.
+
+Recommended adapter-level state:
+
+```lua
+pending_workspace_action = {
+    kind = "viewport_only",
+    reason = "focus",
+}
+```
+
+The exact representation may differ, but the adapter must be able to
+distinguish structural placement from viewport-only placement.
 
 ## Applying Viewport Offset
 
@@ -440,31 +543,47 @@ Until verified, the adapter should apply a placement for every managed target.
 ## Focus Reveal Source
 
 The adapter should reveal the focused id that Hyprland reports during
-`recalculate(ctx)`.
+synchronization.
 
 It should not reveal a pending focus id from a command unless Hyprland has
 already made that target active. This keeps Fit Scroller aligned with the host
 window manager when focus requests fail or are redirected.
 
+When focus is changed by an external Hyprland dispatcher and no layout
+recalculation is triggered automatically, users can send:
+
+```text
+layoutmsg reveal focus
+```
+
+The adapter treats this as a viewport synchronization request. It reads the
+active target from the current `ctx.targets`, updates `state.focused_id`
+through `target_sync.lua`, and reapplies `state.last_layout` with the viewport
+offset needed to reveal that focused target.
+
+In normal operation this command should be triggered automatically by
+`init.lua` through `hl.on("window.active", ...)` when the active window belongs
+to `lua:fit-scroller`.
+
 ## Phase 4 Runtime Checks
 
-Phase 4 should answer these integration questions on Hyprland `0.55`:
+Phase 4 should verify these integration points on the local Hyprland runtime:
 
-- Is there a direct focus method on `target` or `target.window`?
-- Is a stable window address available on `target.window`?
-- Can the custom layout call a Hyprland dispatcher from Lua?
-- Does returning `true` from `layout_msg` after a focus command trigger a
-  recalculation?
+- Does the `window.active` listener dispatch `follow` without recursion or
+  noisy errors?
+- Does `hl.dispatch(hl.dsp.focus({ window = "address:" .. descriptor.window.address }))`
+  focus the target selected by Fit Scroller logical order?
 - How does Hyprland behave when targets are placed outside `ctx.area`?
 
 Observed answers should be documented here after testing.
 
 ## Phase 4 Acceptance Criteria
 
-- `focus previous` and `focus next` either work through Hyprland or fail with
-  a clear unsupported error.
+- `focus previous` and `focus next` use Hyprland's in-process Lua focus
+  dispatcher.
 - Focus commands follow Fit Scroller logical order.
-- Successful focus changes trigger recalculation.
+- Focus changes trigger `follow` through `hl.on("window.active", ...)`.
+- Focus-only changes do not call the solver.
 - Recalculation reveals the Hyprland-reported focused window.
 - All placements are adjusted by `state.viewport_offset`.
 - The adapter still hides all Hyprland object details from core modules.
@@ -487,6 +606,7 @@ Recoverable recalculation failures include:
 - viewport errors;
 - rectangle conversion errors;
 - missing Hyprland placement capabilities.
+- incompatible `last_layout` recovery state.
 
 Recommended recovery flow:
 
@@ -494,8 +614,10 @@ Recommended recovery flow:
 recalculate(ctx)
     -> build inputs
     -> if input validation fails, apply last_layout when possible
-    -> solve layout
+    -> decide whether this pass is structural or viewport-only
+    -> for structural pass, solve layout
     -> if solve fails, apply last_layout when possible
+    -> for viewport-only pass, reuse state.last_layout
     -> compute viewport
     -> if viewport fails, apply last_layout when possible
     -> convert every placement
@@ -523,6 +645,9 @@ Recommended sequence:
 This avoids moving half the workspace before discovering that one rectangle
 cannot be converted.
 
+The same rule applies when reusing `last_layout`: every visible area must be
+prepared before any `target:place(area)` call is made.
+
 ## Applying `last_layout`
 
 When applying `last_layout`, the adapter must verify that it is compatible
@@ -545,6 +670,33 @@ Unsafe use cases:
 If compatibility is uncertain, prefer logging the error and skipping placement
 over applying a misleading stale layout.
 
+## Structural vs Viewport-Only Flow
+
+Phase 5 must preserve the separation introduced before hardening:
+
+- structural changes call the solver, then update the viewport if needed;
+- focus changes and `follow` reuse `state.last_layout` and update only the
+  viewport offset;
+- opening a window may produce both a structural change and a focus change, so
+  the adapter must solve first, then reveal using the new layout;
+- no focus-only path may pass focus or viewport data into the solver.
+
+Tests should instrument a mocked solver and verify call counts for structural
+and viewport-only paths.
+
+## Insert Mode `view`
+
+For `insert_mode = "view"`, the adapter is responsible for computing
+`last_visible_id` from:
+
+- `state.last_layout`;
+- `state.viewport_offset`;
+- effective `scroll_direction`;
+- the normalized viewport size.
+
+If no compatible `last_layout` exists, the adapter passes no visible anchor
+and `target_sync.lua` falls back to `last`.
+
 ## Command Recovery
 
 `layout_msg(ctx, msg)` should use the same validate-then-commit principle as
@@ -564,8 +716,9 @@ For commands that require Hyprland integration:
 
 - parse and validate the command first;
 - resolve the target id;
-- verify the Hyprland focus mechanism exists;
-- request focus;
+- read `descriptor.window.address`;
+- build `address:<descriptor.window.address>`;
+- request focus with `hl.dispatch(hl.dsp.focus({ window = selector }))`;
 - return success only if the request was accepted.
 
 Unsupported integration should return a readable error and should not mutate
@@ -624,8 +777,16 @@ They should cover:
 - solver error uses `last_layout` when compatible;
 - viewport error uses `last_layout` when compatible;
 - no `last_layout` produces a readable diagnostic;
+- `last_layout` is updated only after all placements have been prepared and
+  applied;
 - rectangle conversion prepares all areas before placement;
 - missing placement for a target prevents partial placement;
+- structural recalculation calls the solver;
+- focus-only recalculation does not call the solver;
+- focus-only recalculation reapplies `last_layout` translated by
+  `viewport_offset`;
+- opening a new focused window solves first and then reveals it;
+- `insert_mode = "view"` passes the last fully visible id to `target_sync.lua`;
 - unsupported focus integration returns a readable error;
 - command success returns the value Hyprland needs to recalculate;
 - target placement is called for every managed target.
@@ -638,6 +799,8 @@ listed above.
 - Recoverable failures preserve or reuse the last valid layout when safe.
 - `last_layout` updates only after complete successful placement.
 - Partial placement is avoided.
+- Structural and viewport-only flows remain separate.
+- `insert_mode = "view"` uses adapter-computed visible-anchor metadata.
 - User-visible errors are readable and prefixed with `fit-scroller:`.
 - Unsupported Hyprland integration gaps are documented with a status.
 - Mocked adapter tests cover recovery and command error paths.

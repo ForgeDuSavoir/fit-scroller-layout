@@ -33,10 +33,10 @@ It must not:
 
 V1 rules:
 
-- `right`: left to right, then top to bottom, then overflow to the right;
-- `left`: right to left, then top to bottom, then overflow to the left;
-- `down`: top to bottom, then left to right, then overflow downward;
-- `up`: bottom to top, then left to right, then overflow upward.
+- `right`: top to bottom, then left to right, then overflow to the right;
+- `left`: top to bottom, then right to left, then overflow to the left;
+- `down`: left to right, then top to bottom, then overflow downward;
+- `up`: left to right, then bottom to top, then overflow upward.
 
 ## Canonical Direction
 
@@ -44,8 +44,8 @@ The recommended implementation normalizes candidate generation to `right`.
 
 Canonical `right` means:
 
-- main progression inside a viewport region is left to right;
-- secondary progression is top to bottom;
+- main progression inside a viewport region is top to bottom;
+- secondary progression is left to right;
 - overflow extends to the right.
 
 Other directions are transformations of canonical rectangles.
@@ -97,12 +97,32 @@ behavior depends on them.
 
 Compares two positions in the configured canonical traversal order.
 
-This is used only as a final deterministic tie-breaker after higher-priority
-candidate ranking rules.
+This is used only as a final deterministic tie-breaker after
+tiling-mode-specific rules.
 
 ## Examples
 
 For `right`, four equal cells are traversed:
+
+```text
++---+---+
+| A | C |
++---+---+
+| B | D |
++---+---+
+```
+
+For `left`, the same logical order is mirrored horizontally:
+
+```text
++---+---+
+| C | A |
++---+---+
+| D | B |
++---+---+
+```
+
+For `down`, the primary direction is vertical:
 
 ```text
 +---+---+
@@ -112,33 +132,13 @@ For `right`, four equal cells are traversed:
 +---+---+
 ```
 
-For `left`, the same logical order is mirrored horizontally:
-
-```text
-+---+---+
-| B | A |
-+---+---+
-| D | C |
-+---+---+
-```
-
-For `down`, the primary direction is vertical:
-
-```text
-+---+---+
-| A | C |
-+---+---+
-| B | D |
-+---+---+
-```
-
 For `up`, vertical progression is mirrored:
 
 ```text
 +---+---+
-| B | D |
+| C | D |
 +---+---+
-| A | C |
+| A | B |
 +---+---+
 ```
 

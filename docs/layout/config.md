@@ -25,7 +25,9 @@ In Phase 2, `config.lua` must:
 - reject duplicate dimensions;
 - expose dimensions as a set for layout semantics;
 - expose the sorted cycle used by `toggle dimension`;
-- expose `scroll_direction` even though final traversal is implemented later.
+- expose `scroll_direction` even though final traversal is implemented later;
+- expose `tiling_mode`.
+- expose `insert_mode`.
 
 It must not:
 
@@ -48,6 +50,8 @@ RawConfig = {
             { 0.5, 0.5 },
         },
         scroll_direction = "right",
+        tiling_mode = "split",
+        insert_mode = "view",
     },
     displays = {
         ["eDP-1"] = {
@@ -56,6 +60,8 @@ RawConfig = {
                 { 0.5, 1.0 },
             },
             scroll_direction = "down",
+            tiling_mode = "ajuste",
+            insert_mode = "after_focused",
         },
         ["DP-1"] = {
             allowed_dimensions = {
@@ -65,6 +71,8 @@ RawConfig = {
                 { 0.5, 0.5 },
             },
             scroll_direction = "right",
+            tiling_mode = "split",
+            insert_mode = "view",
         },
     },
 }
@@ -98,6 +106,8 @@ Config = {
         "0.5x0.5",
     },
     scroll_direction = "right",
+    tiling_mode = "split",
+    insert_mode = "view",
 }
 ```
 
@@ -106,6 +116,8 @@ The exact Lua table representation may change, but callers must be able to:
 - list all allowed dimensions;
 - check whether a forced dimension key is allowed;
 - get the next dimension mode for `toggle dimension`.
+- read the configured `tiling_mode`.
+- read the configured `insert_mode`.
 
 ## Dimension Keys
 
@@ -132,6 +144,23 @@ Each allowed dimension must:
 - have `w > 0` and `w <= 1`;
 - have `h > 0` and `h <= 1`;
 - be unique after normalization.
+
+`tiling_mode` must be one of:
+
+- `split`;
+- `ajuste`.
+
+Unknown tiling modes are invalid configuration.
+
+`insert_mode` must be one of:
+
+- `last`;
+- `first`;
+- `view`;
+- `after_focused`;
+- `before_focused`.
+
+Unknown insert modes are invalid configuration.
 
 Invalid configuration must return a readable error. It must not silently clamp
 or remove dimensions.
@@ -161,6 +190,43 @@ The cycle is derived from allowed dimensions sorted by:
 
 The order in which `allowed_dimensions` appears in configuration must not
 affect layout selection or the toggle cycle.
+
+## Tiling Mode
+
+`tiling_mode` controls how the solver assigns dimensions and positions to auto
+windows.
+
+`split`:
+
+- first attempts to split the largest existing slot into two configured
+  allowed dimensions;
+- falls back to `ajuste` when the largest slot cannot be split.
+
+`ajuste`:
+
+- directly searches for a layout where window sizes are as equivalent as
+  possible;
+- uses the smallest size differences when equal sizes are impossible.
+
+`tiling_mode` does not affect `toggle dimension` ordering. Forced dimensions
+are still honored before auto dimensions are selected.
+
+## Insert Mode
+
+`insert_mode` controls where new windows are inserted in the logical window
+order during target synchronization.
+
+Supported values:
+
+- `last`: append to the end of the order;
+- `first`: prepend to the beginning of the order;
+- `view`: insert after the last currently visible window;
+- `after_focused`: insert after the currently focused window;
+- `before_focused`: insert before the currently focused window.
+
+The default value is `view`.
+
+`insert_mode` is consumed by `target_sync.lua`, not by `solver.lua`.
 
 ## Public API
 
@@ -232,6 +298,8 @@ Expected behavior:
 - Display-specific overrides are resolved over defaults.
 - Displays without overrides use the default configuration.
 - Invalid display-specific effective configuration returns a readable error.
+- Invalid `tiling_mode` returns a readable error.
+- Invalid `insert_mode` returns a readable error.
 - The toggle cycle is independent from config order.
 - `auto` cycles to the largest dimension.
 - The smallest forced dimension cycles back to `auto`.
@@ -288,7 +356,9 @@ Missing required fields should produce explicit errors:
 - missing `allowed_dimensions`;
 - empty `allowed_dimensions`;
 - missing `scroll_direction`;
-- unknown `scroll_direction`.
+- unknown `scroll_direction`;
+- unknown `tiling_mode`;
+- unknown `insert_mode`.
 
 Example:
 
@@ -327,6 +397,21 @@ visible for the affected workspace.
 The important constraint is that an invalid configuration must not produce a
 partially normalized config.
 
+## Default Values
+
+Phase 5 must verify defaulting explicitly:
+
+- `tiling_mode` defaults to `split` only when the field is omitted from the
+  effective configuration;
+- `insert_mode` defaults to `view` only when the field is omitted from the
+  effective configuration;
+- display overrides inherit unspecified values from `default`;
+- invalid display-specific values fail for that display instead of falling
+  back silently.
+
+The normalized configuration returned to callers must always contain concrete
+`tiling_mode` and `insert_mode` values.
+
 ## Phase 5 Test Cases
 
 Configuration tests should cover:
@@ -340,7 +425,13 @@ Configuration tests should cover:
 - height greater than `1`;
 - duplicate dimensions after normalization;
 - invalid `scroll_direction`;
+- invalid `tiling_mode`;
+- invalid `insert_mode`;
+- omitted `tiling_mode` defaults to `split`;
+- omitted `insert_mode` defaults to `view`;
 - display override that changes only `scroll_direction`;
+- display override that changes only `tiling_mode`;
+- display override that changes only `insert_mode`;
 - invalid display override that must not fall back silently;
 - toggle cycle independent from input order.
 
@@ -348,6 +439,8 @@ Configuration tests should cover:
 
 - Every invalid config path returns a readable diagnostic.
 - No invalid config produces a partial normalized config.
+- Normalized config always exposes `tiling_mode` and `insert_mode`.
+- The documented defaults are tested.
 - Display-specific errors identify the affected display.
 - Duplicate dimensions are detected after normalization.
 - Tests cover required fields, invalid values, duplicates and display

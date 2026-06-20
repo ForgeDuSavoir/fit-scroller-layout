@@ -12,6 +12,9 @@ It is host-independent: it receives logical rectangles from the solver and
 returns a logical offset. It does not know about Hyprland targets, pixel
 areas, dispatchers or layout messages.
 
+`viewport.lua` does not invoke the solver. It consumes the latest valid layout
+computed by the solver.
+
 ## Responsibilities
 
 In Phase 4, `viewport.lua` must:
@@ -27,6 +30,8 @@ In Phase 4, `viewport.lua` must:
 It must not:
 
 - choose window dimensions;
+- choose window positions;
+- trigger layout solving;
 - rank layout candidates;
 - mutate window order;
 - change Hyprland focus;
@@ -181,27 +186,34 @@ This keeps viewport behavior identical for `right`, `left`, `down` and `up`.
 
 ## Integration With Solver
 
-Phase 3 allows the solver to preserve the existing offset. Phase 4 completes
-the flow:
+The solver and viewport are independent systems that run sequentially.
+
+Structural changes run the solver first:
 
 ```text
 solver.solve(...)
     -> layout.placements_by_id
-    -> viewport.reveal(...)
-    -> layout.viewport_offset is updated
-    -> adapter applies placements relative to viewport_offset
+    -> state.last_layout is updated
 ```
 
-The solver should not repeatedly change dimensions merely because the offset
-changed. The intended sequence is:
+Focus or scroll changes run the viewport after a layout already exists:
 
-1. compute the best layout for the current state;
-2. reveal the focused placement within that layout;
-3. apply the same layout with the new offset.
+```text
+state.last_layout
+    -> viewport.reveal(...)
+    -> state.viewport_offset is updated
+    -> adapter reapplies state.last_layout relative to viewport_offset
+```
 
-If later implementation shows that candidate ranking must depend on the final
-revealed offset, that dependency should be made explicit in `solver.lua`
-instead of hidden inside `viewport.lua`.
+The viewport may only change the translation offset. It must not cause the
+solver to choose different dimensions or world-space positions for the same
+order, config and dimension modes.
+
+If a user-visible action creates a new window and focuses it, those are two
+separate effects:
+
+1. the new target count triggers the solver;
+2. the focus change triggers viewport reveal using the new layout.
 
 ## Removal Clamping
 
@@ -282,6 +294,20 @@ Boundary behavior must be explicit:
 
 These rules should be identical for all directions after normalization.
 
+## Geometry Independence
+
+Viewport updates may only change the scroll offset.
+
+Phase 5 tests must prove that changing focus or viewport offset:
+
+- does not invoke the solver;
+- does not change world-space placements in `state.last_layout`;
+- does not change selected dimensions;
+- only changes the visible placement after adapter translation.
+
+This is a cross-module invariant between `viewport.lua`, `state.lua` and
+`hyprland_adapter.lua`.
+
 ## No-Focus Behavior
 
 When no focused id exists, `viewport.lua` should not reveal anything.
@@ -303,6 +329,8 @@ Viewport tests should cover:
 - focused window larger than viewport;
 - removal that shrinks max offset;
 - all four directions through traversal metadata;
+- focus reveal does not change `last_layout` placements;
+- focus reveal does not change selected dimensions;
 - invalid numeric inputs return errors.
 
 ## Phase 5 Acceptance Criteria
@@ -311,4 +339,5 @@ Viewport tests should cover:
 - Invalid numeric inputs return errors.
 - Ordinary out-of-range offsets are clamped.
 - No-focus recalculation clamps offset without reveal.
+- Viewport changes are translation-only and never alter layout geometry.
 - Direction-specific reveal behavior is covered by tests.
