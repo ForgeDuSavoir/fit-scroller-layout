@@ -1,27 +1,23 @@
 # `layout/commands.lua`
 
-## Phase
-
-Phase 2: State and Commands.
-
 ## Purpose
 
 `commands.lua` parses Fit Scroller layout messages and applies command-level
 state changes.
 
-Phase 2 implements:
+`commands.lua` supports:
 
 - `move previous`;
 - `move next`;
-- `toggle dimension`.
-
-`focus previous` and `focus next` are part of the V1 command set, but their
-actual focus behavior is implemented in Phase 4 after the Hyprland focus API is
-verified.
+- `toggle dimension`;
+- `focus previous`;
+- `focus next`;
+- `reveal focus`;
+- `follow`.
 
 ## Responsibilities
 
-In Phase 2, `commands.lua` must:
+`commands.lua` must:
 
 - parse raw `layout_msg` strings;
 - reject unknown commands with readable errors;
@@ -52,7 +48,7 @@ local command, arg = msg:match("^(%S+)%s*(.*)$")
 For two-word commands, parse the first token as the command family and the
 second token as the action.
 
-Supported Phase 2 messages:
+Supported messages:
 
 ```text
 move previous
@@ -60,7 +56,7 @@ move next
 toggle dimension
 ```
 
-Supported starting in Phase 4:
+Focus and reveal messages:
 
 ```text
 focus previous
@@ -150,8 +146,8 @@ Expected behavior:
 - if there is no focused window, do nothing;
 - if the stored forced key is invalid, return an error and do not mutate state.
 
-Phase 2 does not yet validate whether a forced dimension fits on the cross
-axis. That validation belongs to the solver phase.
+Command parsing does not validate whether a forced dimension fits on the cross
+axis. That validation belongs to the solver.
 
 ## Unknown Commands
 
@@ -162,14 +158,13 @@ Examples:
 ```text
 fit-scroller: expected command
 fit-scroller: unsupported command: resize
-fit-scroller: unsupported command: focus previous
+fit-scroller: unsupported command: move first
 ```
 
-The last example is acceptable only before Phase 4. Starting in Phase 4, focus
-commands must either execute successfully or return a clearer integration
+Focus commands must either execute successfully or return a clear integration
 error if Hyprland focus control is unavailable.
 
-## Phase 2 Acceptance Criteria
+## Guarantees
 
 - `move previous` swaps with the predecessor.
 - `move next` swaps with the successor.
@@ -178,9 +173,9 @@ error if Hyprland focus control is unavailable.
 - Unknown commands return readable errors.
 - Commands do not directly place windows.
 
-## Phase 4 Additions
+## Hardening
 
-Phase 4 completes the V1 command set by adding logical focus commands.
+Logical focus commands are part of the command set.
 
 Focus commands are different from move commands:
 
@@ -319,7 +314,7 @@ layout messages, for example:
 hl.dispatch(hl.dsp.layout("follow"))
 ```
 
-## Phase 4 Acceptance Criteria
+## Guarantees
 
 - `focus previous` selects the logical predecessor.
 - `focus next` selects the logical successor.
@@ -333,9 +328,9 @@ hl.dispatch(hl.dsp.layout("follow"))
 - Unsupported Hyprland focus integration returns a readable error without
   mutating state.
 
-## Phase 5 Additions
+## Hardening
 
-Phase 5 hardens command validation and state mutation.
+This section defines command validation and state mutation.
 
 Commands should be predictable even when the user sends malformed messages,
 when no window is focused, or when the current state is temporarily incomplete.
@@ -396,7 +391,7 @@ Viewport-only commands are:
 - `reveal focus`;
 - `follow`.
 
-Phase 5 should verify that each command reports the correct intent to the
+Tests must verify that each command reports the correct intent to the
 adapter so the adapter can choose between structural layout flow and
 viewport-only flow.
 
@@ -412,7 +407,7 @@ If no focused id exists:
 
 These are not errors because no user intent can be applied to a missing focus.
 
-## Phase 5 Test Cases
+## Test Cases
 
 Command tests should cover:
 
@@ -432,7 +427,7 @@ Command tests should cover:
 - `reveal focus` and `follow` report viewport-only intent;
 - failed validation leaves state unchanged.
 
-## Phase 5 Acceptance Criteria
+## Guarantees
 
 - Malformed commands return readable errors.
 - No-focus commands are no-ops.

@@ -1,21 +1,17 @@
 # `layout/config.lua`
 
-## Phase
-
-Phase 2: State and Commands.
-
 ## Purpose
 
 `config.lua` owns the normalized Fit Scroller configuration used by command
-handling and later layout computation.
+handling and layout computation.
 
-In Phase 2, its main responsibility is to expose the allowed dimensions and the
+Its main responsibility is to expose the allowed dimensions and the
 deterministic cycle used by `toggle dimension` for the display currently being
 laid out.
 
 ## Responsibilities
 
-In Phase 2, `config.lua` must:
+`config.lua` must:
 
 - provide a default V1 configuration;
 - support display-specific configuration overrides;
@@ -25,8 +21,8 @@ In Phase 2, `config.lua` must:
 - reject duplicate dimensions;
 - expose dimensions as a set for layout semantics;
 - expose the sorted cycle used by `toggle dimension`;
-- expose `scroll_direction` even though final traversal is implemented later;
-- expose `tiling_mode`.
+- expose `scroll_direction`;
+- expose `tiling_mode`;
 - expose `insert_mode`.
 
 It must not:
@@ -115,8 +111,8 @@ The exact Lua table representation may change, but callers must be able to:
 
 - list all allowed dimensions;
 - check whether a forced dimension key is allowed;
-- get the next dimension mode for `toggle dimension`.
-- read the configured `tiling_mode`.
+- get the next dimension mode for `toggle dimension`;
+- read the configured `tiling_mode`;
 - read the configured `insert_mode`.
 
 ## Dimension Keys
@@ -291,7 +287,7 @@ Expected behavior:
 - the last forced dimension key returns `auto`;
 - an unknown key should be treated as invalid and return an error.
 
-## Phase 2 Acceptance Criteria
+## Guarantees
 
 - Invalid dimensions are rejected.
 - Duplicate dimensions are rejected.
@@ -304,9 +300,9 @@ Expected behavior:
 - `auto` cycles to the largest dimension.
 - The smallest forced dimension cycles back to `auto`.
 
-## Phase 5 Additions
+## Hardening
 
-Phase 5 hardens configuration validation and error reporting.
+This section defines configuration validation and error reporting.
 
 The goal is that invalid user configuration fails predictably before it can
 mutate state or produce partial placements.
@@ -399,7 +395,7 @@ partially normalized config.
 
 ## Default Values
 
-Phase 5 must verify defaulting explicitly:
+Tests must verify defaulting explicitly:
 
 - `tiling_mode` defaults to `split` only when the field is omitted from the
   effective configuration;
@@ -412,7 +408,7 @@ Phase 5 must verify defaulting explicitly:
 The normalized configuration returned to callers must always contain concrete
 `tiling_mode` and `insert_mode` values.
 
-## Phase 5 Test Cases
+## Test Cases
 
 Configuration tests should cover:
 
@@ -435,7 +431,7 @@ Configuration tests should cover:
 - invalid display override that must not fall back silently;
 - toggle cycle independent from input order.
 
-## Phase 5 Acceptance Criteria
+## Guarantees
 
 - Every invalid config path returns a readable diagnostic.
 - No invalid config produces a partial normalized config.

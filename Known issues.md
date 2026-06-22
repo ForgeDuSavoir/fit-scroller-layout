@@ -1,0 +1,5 @@
+- [ ] Forced dimensions -> Switching desktop looses forced dimension state
+- [ ] ajuste not working correctly : 
+	- [ ] Scroll is not as little as possible -> 0.33 size not picked while it should
+	- [ ] Windows before window with forced dimension do not have correct dimensions
+- [ ] Per-display config not working

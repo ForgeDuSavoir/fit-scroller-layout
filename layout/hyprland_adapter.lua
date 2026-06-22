@@ -60,6 +60,10 @@ local function target_id(target, index)
         return tostring(window.stable_id)
     end
 
+    if window and window.address ~= nil then
+        return "address:" .. tostring(window.address)
+    end
+
     if target and target.index ~= nil then
         return tostring(target.index)
     end
@@ -91,11 +95,13 @@ local function target_descriptors(targets)
     return descriptors
 end
 
-local function workspace_key(ctx)
-    local workspace = ctx.workspace or ctx.active_workspace
+local function workspace_key_from_workspace(workspace)
     if type(workspace) == "table" then
         if workspace.id ~= nil then
             return "workspace:" .. tostring(workspace.id)
+        end
+        if workspace.config_name ~= nil then
+            return "workspace-config:" .. tostring(workspace.config_name)
         end
         if workspace.name ~= nil then
             return "workspace-name:" .. tostring(workspace.name)
@@ -103,15 +109,14 @@ local function workspace_key(ctx)
     elseif workspace ~= nil then
         return "workspace:" .. tostring(workspace)
     end
+end
 
-    local monitor = ctx.monitor
-    local monitor_workspace = type(monitor) == "table" and (monitor.workspace or monitor.active_workspace) or nil
-    if type(monitor_workspace) == "table" then
-        if monitor_workspace.id ~= nil then
-            return "workspace:" .. tostring(monitor_workspace.id)
-        end
-        if monitor_workspace.name ~= nil then
-            return "workspace-name:" .. tostring(monitor_workspace.name)
+local function workspace_key(ctx)
+    for _, target in ipairs(ctx.targets or {}) do
+        local window = target and target.window
+        local key = workspace_key_from_workspace(window and window.workspace)
+        if key then
+            return key
         end
     end
 

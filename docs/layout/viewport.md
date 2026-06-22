@@ -1,9 +1,5 @@
 # `layout/viewport.lua`
 
-## Phase
-
-Phase 4: Focus and Viewport.
-
 ## Purpose
 
 `viewport.lua` computes the scroll offset used to reveal the focused window.
@@ -17,7 +13,7 @@ computed by the solver.
 
 ## Responsibilities
 
-In Phase 4, `viewport.lua` must:
+`viewport.lua` must:
 
 - reveal the focused window with the smallest required offset change;
 - keep the current offset unchanged when the focused window is already fully
@@ -236,8 +232,8 @@ window is removed.
 Manual scrolling is intentionally absent from V1.
 
 `viewport.lua` may keep the API small enough to add manual scrolling later,
-but Phase 4 must not introduce commands or state transitions that move the
-viewport independently from focus reveal and clamping.
+but V1 does not introduce commands or state transitions that move the viewport
+independently from focus reveal and clamping.
 
 ## Errors
 
@@ -248,9 +244,9 @@ viewport independently from focus reveal and clamping.
 - the viewport size on the scroll axis is zero or negative.
 
 The adapter decides whether to preserve `state.last_layout` or surface the
-error. Full recovery behavior is hardened in Phase 5.
+error. Recovery is handled by the adapter through the previous valid layout.
 
-## Phase 4 Acceptance Criteria
+## Guarantees
 
 - The focused window is fully visible after successful focus changes.
 - Focusing an already visible window does not change the offset.
@@ -260,9 +256,9 @@ error. Full recovery behavior is hardened in Phase 5.
 - Direction-specific behavior works for `right`, `left`, `down` and `up`.
 - Manual scrolling is not exposed.
 
-## Phase 5 Additions
+## Hardening
 
-Phase 5 hardens invalid-input handling and boundary behavior.
+This section defines invalid-input handling and boundary behavior.
 
 `viewport.lua` should remain a small pure module. Its main hardening goal is
 to make offset behavior predictable for every boundary case.
@@ -298,7 +294,7 @@ These rules should be identical for all directions after normalization.
 
 Viewport updates may only change the scroll offset.
 
-Phase 5 tests must prove that changing focus or viewport offset:
+Tests must prove that changing focus or viewport offset:
 
 - does not invoke the solver;
 - does not change world-space placements in `state.last_layout`;
@@ -315,7 +311,7 @@ When no focused id exists, `viewport.lua` should not reveal anything.
 The adapter may call `clamp_offset` directly to keep the offset inside the new
 workspace extent after removals or configuration changes.
 
-## Phase 5 Test Cases
+## Test Cases
 
 Viewport tests should cover:
 
@@ -333,7 +329,7 @@ Viewport tests should cover:
 - focus reveal does not change selected dimensions;
 - invalid numeric inputs return errors.
 
-## Phase 5 Acceptance Criteria
+## Guarantees
 
 - Boundary behavior is deterministic and tested.
 - Invalid numeric inputs return errors.

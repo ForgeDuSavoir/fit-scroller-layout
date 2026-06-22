@@ -1,1 +1,3 @@
-- [ ] 
+- [ ] Fix [[Known issues]]
+- [ ] Theorize `spacial` mode
+- [ ] Implement `spacial` mode

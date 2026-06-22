@@ -1,9 +1,5 @@
 # `layout/target_sync.lua`
 
-## Phase
-
-Phase 2: State and Commands.
-
 ## Purpose
 
 `target_sync.lua` reconciles the live targets received from Hyprland with Fit
@@ -14,7 +10,7 @@ inserting new windows according to the configured `insert_mode`.
 
 ## Responsibilities
 
-In Phase 2, `target_sync.lua` must:
+`target_sync.lua` must:
 
 - receive normalized target descriptors from `hyprland_adapter.lua`;
 - remove ids that are no longer present;
@@ -163,10 +159,9 @@ The module should return an ordered list:
 }
 ```
 
-The solver later consumes this ordered list. In Phase 2, the adapter may still
-use it only for deterministic temporary placement.
+The solver consumes this ordered list.
 
-Starting in Phase 4, synchronization may also return metadata about the sync
+In the current implementation, synchronization may also return metadata about the sync
 pass:
 
 ```lua
@@ -190,7 +185,7 @@ After synchronization:
 - ordered output follows `workspace_state.order`;
 - removed ids have no dimension mode left in state.
 
-## Phase 2 Acceptance Criteria
+## Guarantees
 
 - Existing order is preserved across recalculations.
 - New windows respect `insert_mode = "last"`.
@@ -202,9 +197,9 @@ After synchronization:
 - Closed windows are removed from order and dimension state.
 - The returned target list is ordered by Fit Scroller's logical order.
 
-## Phase 5 Additions
+## Hardening
 
-Phase 5 hardens synchronization against inconsistent or incomplete target
+This section defines synchronization against inconsistent or incomplete target
 descriptors.
 
 `target_sync.lua` is the first core module that receives live target identity.
@@ -267,8 +262,8 @@ guess which active window Hyprland intended.
 
 ## Insert Mode Hardening
 
-Phase 5 must treat insertion mode as an explicit input, not as hidden target
-sync policy.
+Insertion mode must be treated as an explicit input, not as hidden target sync
+policy.
 
 Rules to verify:
 
@@ -285,7 +280,7 @@ Rules to verify:
 `target_sync.lua` must not compute visibility itself. For `view`, it trusts the
 adapter-provided `last_visible_id`.
 
-## Phase 5 Test Cases
+## Test Cases
 
 Target sync tests should cover:
 
@@ -304,7 +299,7 @@ Target sync tests should cover:
 - `view` insertion uses adapter-provided last visible id;
 - missing focused or `view` anchor falls back to `last`.
 
-## Phase 5 Acceptance Criteria
+## Guarantees
 
 - Invalid target descriptor input returns errors before mutating state.
 - Duplicate ids cannot enter `state.order`.

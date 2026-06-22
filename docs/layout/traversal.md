@@ -1,9 +1,5 @@
 # `layout/traversal.lua`
 
-## Phase
-
-Phase 3: Geometry and Solver.
-
 ## Purpose
 
 `traversal.lua` owns the mapping between Fit Scroller's logical window order
@@ -14,7 +10,7 @@ module to transform positions for `left`, `down` and `up`.
 
 ## Responsibilities
 
-In Phase 3, `traversal.lua` must:
+`traversal.lua` must:
 
 - define direction metadata for `right`, `left`, `down` and `up`;
 - identify the scroll axis and cross axis;
@@ -142,7 +138,7 @@ For `up`, vertical progression is mirrored:
 +---+---+
 ```
 
-## Phase 3 Acceptance Criteria
+## Guarantees
 
 - Each supported direction has explicit metadata.
 - Scroll axis and cross axis are correct for each direction.
@@ -150,9 +146,9 @@ For `up`, vertical progression is mirrored:
 - Position comparison preserves logical order for every direction.
 - Direction behavior is testable without Hyprland.
 
-## Phase 5 Additions
+## Hardening
 
-Phase 5 hardens direction validation and transformation tests.
+This section defines direction validation and transformation tests.
 
 Traversal is a small module, but mistakes here affect solver ranking,
 viewport reveal and adapter placement. Direction behavior should therefore be
@@ -181,7 +177,7 @@ For every supported direction:
 - scroll axis and cross axis remain consistent with `direction_info`;
 - position comparison is deterministic for equivalent rectangles.
 
-## Phase 5 Test Cases
+## Test Cases
 
 Traversal tests should cover:
 
@@ -196,7 +192,7 @@ Traversal tests should cover:
 - comparison order for `down`;
 - comparison order for `up`.
 
-## Phase 5 Acceptance Criteria
+## Guarantees
 
 - Unknown directions fail explicitly.
 - All transformations are round-trip tested.

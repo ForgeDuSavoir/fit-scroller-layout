@@ -1,9 +1,5 @@
 # `layout/geometry.lua`
 
-## Phase
-
-Phase 3: Geometry and Solver.
-
 ## Purpose
 
 `geometry.lua` provides host-independent geometry primitives for Fit Scroller.
@@ -13,7 +9,7 @@ tables so they can be tested without a running compositor.
 
 ## Responsibilities
 
-In Phase 3, `geometry.lua` must:
+`geometry.lua` must:
 
 - define rectangle and dimension helpers;
 - compute areas;
@@ -131,7 +127,7 @@ Geometry helpers must preserve:
 - no hidden dependency on Hyprland state;
 - exact logical fractions until explicit rounding is requested.
 
-## Phase 3 Acceptance Criteria
+## Guarantees
 
 - Area calculation is deterministic.
 - Dimension comparison follows area, width, height.
@@ -139,9 +135,9 @@ Geometry helpers must preserve:
 - Full visibility can be computed against a viewport.
 - Logical rectangles can be converted to pixel rectangles consistently.
 
-## Phase 5 Additions
+## Hardening
 
-Phase 5 hardens numeric validation and rounding edge cases.
+This section defines numeric validation and rounding edge cases.
 
 Geometry helpers are used by the solver, viewport and adapter. They should
 fail clearly on invalid numbers instead of letting invalid rectangles propagate
@@ -175,7 +171,7 @@ pixel:   [0, 960]   [960, 1920]
 The boundary at `0.5` must produce the same pixel coordinate for both adjacent
 rectangles.
 
-## Phase 5 Test Cases
+## Test Cases
 
 Geometry tests should cover:
 
@@ -188,7 +184,7 @@ Geometry tests should cover:
 - deterministic rounding of shared boundaries;
 - no negative pixel widths after rounding.
 
-## Phase 5 Acceptance Criteria
+## Guarantees
 
 - Invalid numeric input does not propagate silently.
 - Rounding is deterministic at shared boundaries.

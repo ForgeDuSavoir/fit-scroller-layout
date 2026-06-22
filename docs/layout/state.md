@@ -1,20 +1,16 @@
 # `layout/state.lua`
 
-## Phase
-
-Phase 2: State and Commands.
-
 ## Purpose
 
 `state.lua` owns mutable Fit Scroller state that must survive between Hyprland
 `recalculate(ctx)` calls.
 
-Phase 2 introduces enough state to preserve logical window order and per-window
-dimension modes.
+It preserves logical window order, per-window dimension modes, focus state,
+viewport offset and the last valid layout.
 
 ## Responsibilities
 
-In Phase 2, `state.lua` must:
+`state.lua` must:
 
 - create workspace state lazily;
 - store logical window order;
@@ -46,13 +42,11 @@ WorkspaceState = {
 }
 ```
 
-Phase 2 uses:
+Core state fields:
 
 - `order`;
 - `dimension_mode_by_id`;
 - `focused_id`.
-
-`viewport_offset` and `last_layout` are initialized for later phases.
 
 `last_layout` is the boundary between the solver and viewport systems: the
 solver updates it after structural changes, and viewport changes consume it
@@ -106,15 +100,28 @@ Expected behavior:
 
 ## Workspace Key
 
-State should be keyed by a stable workspace identifier when the Hyprland API
-exposes one.
+State must be keyed by a stable workspace identifier.
 
-Until the runtime integration confirms the available fields, the adapter may
-provide a provisional workspace key. The chosen key must be documented here
-once verified.
+Hyprland's Lua custom layout `ctx` does not expose `ctx.workspace`. The adapter
+must derive the workspace key from the live target windows:
 
-Avoid using a single global workspace state unless Hyprland exposes no usable
-workspace identity during early implementation.
+1. `target.window.workspace.id`;
+2. `target.window.workspace.config_name`;
+3. `target.window.workspace.name`.
+
+The key should include the field used, for example `workspace:3` or
+`workspace-name:special:magic`, so numeric ids and names cannot collide.
+
+Using one global state is not acceptable for normal operation. If no target
+window exposes a workspace, the adapter may use an explicit fallback key only
+for an empty or unidentifiable context, and must avoid interpreting that
+fallback as a real workspace lifecycle event.
+
+This matters for cleanup: a window id missing from the current `ctx.targets`
+means "not part of this layout pass". It should be treated as closed only after
+the adapter has selected the correct workspace state for the current target
+workspace. Otherwise, switching workspaces can delete `dimension_mode_by_id`
+entries for windows that still exist on another workspace.
 
 ## Invariants
 
@@ -125,7 +132,7 @@ After synchronization:
 - `dimension_mode_by_id` has no entries for missing ids;
 - `focused_id` is either present or `nil`.
 
-## Phase 2 Acceptance Criteria
+## Guarantees
 
 - State is created lazily for a workspace.
 - Window order survives repeated recalculations.
@@ -133,9 +140,7 @@ After synchronization:
 - `move previous` and `move next` can mutate order through state helpers.
 - `toggle dimension` can mutate only the focused window's dimension mode.
 
-## Phase 4 Additions
-
-Phase 4 starts using `viewport_offset` as active state.
+## Hardening
 
 `viewport_offset` stores the current scroll offset for the workspace on the
 configured scroll axis. The value is logical, not pixel-based.
@@ -183,7 +188,7 @@ boundary. In that case, state must not pretend a different window is focused.
 Changing `focused_id` may trigger viewport reveal. It must not trigger the
 solver by itself.
 
-## Public API Additions
+## Public API
 
 Recommended additions:
 
@@ -204,10 +209,11 @@ The caller is responsible for passing a valid offset returned by
 
 Stores the most recent valid layout for later recovery.
 
-Phase 4 may only populate this value. Phase 5 defines the complete recovery
-policy for invalid configuration or placement failures.
+The adapter may only populate this value after a complete successful placement.
+Recovery from invalid configuration or placement failures must keep the previous
+valid value.
 
-## Phase 4 Acceptance Criteria
+## Guarantees
 
 - `viewport_offset` survives repeated structural recalculations.
 - Focus changes update `focused_id` only after Hyprland reports the active
@@ -216,9 +222,9 @@ policy for invalid configuration or placement failures.
 - Failed layout or focus integration does not corrupt focus state.
 - Offset storage remains per workspace.
 
-## Phase 5 Additions
+## Hardening
 
-Phase 5 hardens state mutation and last-valid-layout recovery.
+This section defines state mutation and last-valid-layout recovery.
 
 The core rule is that recoverable failures must not leave state halfway
 mutated. Commands and recalculation should either commit a coherent new state
@@ -309,7 +315,7 @@ Example for `toggle dimension`:
 
 ## State Invariant Checks
 
-Phase 5 should add a debug-only invariant check:
+State exposes a debug-oriented invariant check:
 
 ```lua
 state.validate_workspace_state(workspace_state, present_ids)
@@ -327,7 +333,7 @@ It should verify:
 The adapter may call this during development or tests. Runtime behavior should
 not depend on expensive validation unless needed for diagnostics.
 
-## Phase 5 Test Cases
+## Test Cases
 
 State tests should cover:
 
@@ -342,7 +348,7 @@ State tests should cover:
 - invariant validation rejects duplicate order ids;
 - invariant validation rejects dimension modes for missing ids.
 
-## Phase 5 Acceptance Criteria
+## Guarantees
 
 - Recoverable failures do not corrupt workspace state.
 - `last_layout` represents only fully successful layouts.

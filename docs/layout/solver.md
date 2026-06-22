@@ -1,9 +1,5 @@
 # `layout/solver.lua`
 
-## Phase
-
-Phase 3: Geometry and Solver.
-
 ## Purpose
 
 `solver.lua` computes the best Fit Scroller layout for the current workspace
@@ -13,7 +9,7 @@ It is the main implementation of the product rules in `SPECIFICATION.md`.
 
 ## Responsibilities
 
-In Phase 3, `solver.lua` must:
+`solver.lua` must:
 
 - consume ordered target descriptors;
 - consume normalized display configuration;
@@ -35,7 +31,7 @@ It must not:
 - read focused id;
 - read viewport offset;
 - decide whether the focused window is visible;
-- implement viewport reveal. Focus reveal belongs to Phase 4.
+- implement viewport reveal. Focus reveal belongs to `viewport.lua`.
 
 ## Inputs
 
@@ -74,8 +70,8 @@ Layout = {
 }
 ```
 
-The solver output is world-space geometry only. Phase 4 owns viewport reveal
-and offset adjustment.
+The solver output is world-space geometry only. `viewport.lua` owns viewport
+reveal and offset adjustment.
 
 ## Candidate Model
 
@@ -234,16 +230,16 @@ or:
 { ok = false, error = "fit-scroller: ..." }
 ```
 
-## Phase 3 Limitations
+## Limitations
 
-Phase 3 does not implement:
+The current solver intentionally does not implement:
 
 - focus commands;
 - focus reveal offset adjustment;
 - manual scrolling;
 - last-valid-layout recovery beyond returning errors to the caller.
 
-## Phase 3 Acceptance Criteria
+## Guarantees
 
 - Solver output is deterministic for identical input.
 - Auto windows receive only configured allowed dimensions.
@@ -255,9 +251,9 @@ Phase 3 does not implement:
 - Returned placements preserve logical order.
 - Overflow occurs only on the configured scroll axis.
 
-## Phase 5 Additions
+## Hardening
 
-Phase 5 hardens solver validation, edge-case handling and diagnostics.
+This section defines solver validation, edge-case handling and diagnostics.
 
 The solver should never return a partial layout. It returns either a complete
 valid layout for every target, or an error that the adapter can recover from.
@@ -346,7 +342,7 @@ Tie-breaking must be stable for identical input.
 
 ## Solver and Viewport Independence Tests
 
-Phase 5 must add regression tests proving that solver output depends only on:
+Regression tests must prove that solver output depends only on:
 
 - normalized configuration;
 - ordered targets;
@@ -397,8 +393,7 @@ possible.
 
 ## Diagnostics
 
-Phase 5 should make solver failures diagnosable without exposing Hyprland
-objects.
+Solver failures should be diagnosable without exposing Hyprland objects.
 
 Useful diagnostic fields:
 
@@ -413,7 +408,7 @@ Useful diagnostic fields:
 
 The adapter may flatten these into strings for Hyprland logs.
 
-## Phase 5 Test Cases
+## Test Cases
 
 Solver tests should cover:
 
@@ -436,7 +431,7 @@ Solver tests should cover:
 - viewport offset changes do not change solver output;
 - no successful layout has missing placements.
 
-## Phase 5 Acceptance Criteria
+## Guarantees
 
 - Invalid solver input returns an error and no partial layout.
 - Successful output contains complete placements and dimensions.

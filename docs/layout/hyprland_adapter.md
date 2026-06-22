@@ -1,76 +1,54 @@
 # `layout/hyprland_adapter.lua`
 
-## Phase
-
-Phase 1: Integration Skeleton.
-
 ## Purpose
 
 `hyprland_adapter.lua` owns the boundary between Fit Scroller and the Hyprland
 Lua custom layout API.
 
-In Phase 1, it provides the smallest useful implementation:
-
-- read the live targets from `ctx.targets`;
-- read the available area from `ctx.area`;
-- place all windows using a trivial deterministic layout;
-- return readable errors for unsupported layout messages.
-
-The adapter is the only Phase 1 module that should know the shape of Hyprland
-objects such as `ctx`, `target`, `target.window`, and Hyprland area objects.
+It is the only module that should know the shape of Hyprland objects such as
+`ctx`, `target`, `target.window`, workspace objects and Hyprland area tables.
 
 ## Responsibilities
-
-In Phase 1, the adapter must:
 
 - expose `recalculate(ctx)`;
 - expose `layout_msg(ctx, msg)`;
 - safely handle `nil` or empty `ctx.targets`;
 - safely handle missing `ctx.area`;
+- convert Hyprland targets into normalized descriptors;
+- resolve workspace state from `target.window.workspace`;
+- resolve display configuration;
+- synchronize target order;
+- run the solver for structural changes;
+- apply viewport offsets for focus-only changes;
 - place each target using `target:place(area)`;
-- use Hyprland-provided area helpers where possible;
-- report unsupported messages as strings.
-
-It must not yet:
-
-- preserve window order across recalculations;
-- compute target ids;
-- store workspace state;
-- implement Fit Scroller commands;
-- implement forced dimensions;
-- implement scrolling or viewport offset;
-- implement the final solver.
+- focus targets through Hyprland's in-process Lua dispatcher;
+- report command and integration errors as readable strings.
 
 ## Public API
 
 ### `recalculate(ctx)`
 
-Recomputes and applies the temporary Phase 1 layout.
+Recomputes and applies the current layout.
 
 Expected behavior:
 
 1. Read `ctx.targets`.
-2. If there are no targets, return without error.
+2. If there are no targets, commit an empty layout state and return without
+   error.
 3. Read `ctx.area`.
-4. Place each target in a deterministic temporary layout.
-
-Phase 1 may use a simple columns layout:
-
-```lua
-for i, target in ipairs(ctx.targets) do
-    target:place(ctx:column(i, #ctx.targets))
-end
-```
-
-This mirrors the local `columns.lua` example and avoids custom rectangle
-conversion before the `target:place(area)` shape is verified.
+4. Resolve display configuration.
+5. Synchronize target descriptors with workspace state.
+6. Solve structural layouts when target order, target count or dimension modes
+   changed.
+7. Reuse `state.last_layout` for viewport-only updates.
+8. Convert logical rectangles to Hyprland area tables.
+9. Place every managed target.
 
 ### `layout_msg(ctx, msg)`
 
 Handles layout messages sent through Hyprland's `layoutmsg` dispatcher.
 
-In Phase 1, no messages are supported. The function should return a readable
-string such as:
+Unsupported messages should return a readable string such as:
 
 ```text
 fit-scroller: unsupported command: <command>
@@ -82,40 +60,24 @@ If `msg` is empty or missing, the error should still be readable:
 fit-scroller: expected command
 ```
 
-## Temporary Layout
+## Runtime Checks
 
-The Phase 1 layout is intentionally not Fit Scroller's final layout.
-
-Its purpose is only to verify that:
-
-- the custom layout is registered correctly;
-- `ctx.targets` is readable;
-- `ctx.area` is available;
-- `target:place(area)` works;
-- layout messages reach `layout_msg(ctx, msg)`.
-
-The recommended temporary placement is equal columns because Hyprland's local
-examples show `ctx:column(i, n)` being passed directly to `target:place(area)`.
-
-## Runtime Checks To Perform In Phase 1
-
-Phase 1 should answer or narrow these integration questions:
+The adapter should keep these integration questions documented:
 
 - Does returning `true` from `layout_msg` trigger `recalculate(ctx)`?
 - What exact value is present in `ctx.area`?
 - Can `target:place(area)` accept only Hyprland helper areas, or also plain Lua
   rectangle tables?
 - Which fields are available on each `target` and `target.window`?
-- Is workspace identity available from `ctx`?
+- Which window workspace fields are available for state keys?
 
-These checks should be documented here once observed on Hyprland `0.55`.
+Observed answers should be documented here and in
+`references/hyprland-custom-layout-api.md`.
 
 ## Unknown Command Behavior
 
-Unknown command handling should be implemented before real commands.
-
-This gives keybindings a predictable failure mode and confirms that the
-`layoutmsg` dispatch path reaches the custom layout.
+Unknown command handling gives keybindings a predictable failure mode and keeps
+the `layoutmsg` dispatch path diagnosable.
 
 Example:
 
@@ -144,24 +106,20 @@ end
   skip placement and log during development;
 - missing `target:place`: skip that target and log during development.
 
-The final last-valid-layout recovery described in the architecture belongs to
-later phases. Phase 1 only needs to avoid crashing during basic Hyprland use.
+Last-valid-layout recovery belongs to the recovery flow described below.
 
-## Phase 1 Acceptance Criteria
+## Guarantees
 
 - With zero tiled windows, `recalculate(ctx)` returns without error.
-- With one tiled window, the target is placed in the full available area.
-- With multiple tiled windows, targets are placed in deterministic equal
-  columns.
-- Sending any layout message returns a readable unsupported-command error.
-- The implementation records enough observed API behavior to update this file
-  before Phase 2 starts.
+- With one tiled window, the target is placed according to solver output.
+- With multiple tiled windows, targets are placed in Fit Scroller logical order.
+- Unsupported layout messages return readable errors.
+- Observed Hyprland API behavior is documented.
 
-## Phase 2 Additions
+## Target Normalization
 
-Phase 2 keeps the adapter as the only module that reads raw Hyprland objects,
-but it starts producing normalized target descriptors for state and command
-modules.
+The adapter keeps raw Hyprland object access out of core modules by producing
+normalized target descriptors for state, command and solver modules.
 
 ### Target Descriptors
 
@@ -183,12 +141,13 @@ read raw Hyprland target fields.
 Identity resolution should prefer fields in this order:
 
 1. `target.window.stable_id`;
-2. a verified Hyprland window address field, if exposed;
-3. `target.index` as a temporary fallback.
+2. `target.window.address`;
+3. `target.index` as a last-resort fallback.
 
-`target.index` is not stable enough for final behavior. If it is used during
-early implementation, the limitation must be documented and treated as a
-runtime integration gap.
+`target.index` is not stable enough for persistent per-window state. If it is
+used, the limitation must be documented and treated as a runtime integration
+gap. `target.window.address` is available in the inspected Hyprland Lua bindings
+and is more stable than the per-layout target index.
 
 ### Active Target
 
@@ -203,34 +162,38 @@ The adapter should provide a workspace key to `state.lua`.
 
 Resolution order:
 
-1. a verified workspace id from `ctx`, if available;
-2. a verified workspace name from `ctx`, if available;
-3. a temporary global key during early implementation.
+1. `target.window.workspace.id`;
+2. `target.window.workspace.config_name`;
+3. `target.window.workspace.name`;
+4. an explicit fallback key only when no target exposes a workspace.
 
-The chosen key must be documented once Hyprland `0.55` runtime behavior is
-observed.
+Hyprland's Lua layout context does not expose `ctx.workspace`; the source builds
+`ctx` from `area`, `targets` and layout helper functions only. Workspace
+identity is exposed through `target.window.workspace` and through global query
+helpers such as `hl.get_workspaces()` and `hl.get_workspace_windows(workspace)`.
 
-### Phase 2 Provisional Integration
+The adapter must not use a single global key for normal workspace state. A
+global key makes windows from the previous workspace appear removed when the
+current `ctx.targets` changes, which deletes their forced dimension state during
+target synchronization.
 
-Until Hyprland `0.55` runtime inspection confirms the exact custom layout
-fields, the Phase 2 implementation uses explicit provisional fallbacks:
+### Hyprland Binding Support
 
-- target id prefers `target.window.stable_id`, then `target.index`, then a
-  synthetic index-based id for smoke tests;
+The verified Hyprland Lua bindings support these fields:
+
+- target id prefers `target.window.stable_id`, then `target.window.address`,
+  then a synthetic index-based id for smoke tests;
 - active focus is read from `target.window.active`;
-- workspace key probes common `ctx.workspace` and monitor workspace shapes,
-  then falls back to `global`;
+- workspace key is derived from `target.window.workspace`;
 - display id probes common monitor/output fields, then falls back to
   `default`.
 
-These fallbacks are acceptable for early integration and local smoke tests, but
-they are not final Hyprland API decisions. Runtime observations should replace
-or confirm them before hardening state persistence and focus behavior.
+Index-based and global fallbacks are acceptable for local smoke tests only. They
+are not correct for state persistence across workspace switches.
 
 ### Command Dispatch
 
-In Phase 2, `layout_msg(ctx, msg)` delegates supported command parsing to
-`commands.lua`.
+`layout_msg(ctx, msg)` delegates supported command parsing to `commands.lua`.
 
 Expected flow:
 
@@ -261,29 +224,18 @@ currently visible target id before synchronization. It should use:
 `target_sync.lua` receives this as host-independent metadata and does not
 inspect Hyprland geometry directly.
 
-### Temporary Placement With Logical Order
-
-The final solver is not implemented in Phase 2.
-
-However, once `target_sync.lua` returns targets in logical order, the temporary
-columns layout should use that order instead of raw `ctx.targets` order. This
-allows `move previous` and `move next` to be visibly tested before the solver
-exists.
-
-### Phase 2 Acceptance Criteria
+### Target Sync Guarantees
 
 - Each live target is converted to a descriptor with an id.
 - Workspace state is retrieved through a workspace key.
 - Recalculation synchronizes target order before placement.
-- Temporary placement follows Fit Scroller logical order.
-- `move previous` and `move next` visibly change temporary placement order.
-- `toggle dimension` updates state even though geometry does not yet reflect
-  forced dimensions.
+- Placement follows Fit Scroller logical order.
+- `move previous` and `move next` visibly change placement order.
+- `toggle dimension` updates state and is reflected by solver output.
 
-## Phase 3 Additions
+## Solver Placement
 
-Phase 3 replaces the temporary columns placement with solver-produced
-placements.
+The adapter applies solver-produced placements.
 
 The adapter still owns all Hyprland object interaction. The solver must return
 plain logical rectangles, and the adapter must convert those rectangles into
@@ -291,7 +243,7 @@ the shape accepted by `target:place(area)`.
 
 ### Recalculate Flow
 
-Expected Phase 3 flow:
+Expected flow:
 
 ```text
 structural recalculate(ctx)
@@ -342,11 +294,10 @@ The core rectangle type is:
 { x = number, y = number, w = number, h = number }
 ```
 
-The exact Hyprland placement area shape is still an integration detail. Phase 3
-must verify whether `target:place` accepts plain Lua tables or requires objects
-created by Hyprland helpers.
+The adapter must verify whether `target:place` accepts plain Lua tables or
+requires objects created by Hyprland helpers.
 
-The current Phase 3 implementation uses a provisional adapter conversion:
+The current implementation uses adapter-owned rectangle conversion:
 
 - the solver returns normalized logical rectangles;
 - the adapter expects `ctx.area` to expose numeric `x`, `y`, `w`/`width` and
@@ -355,7 +306,7 @@ The current Phase 3 implementation uses a provisional adapter conversion:
 - the adapter passes those tables to `target:place`.
 
 If `ctx.area` does not expose numeric fields, the adapter returns a readable
-error instead of falling back to the Phase 2 columns layout. This keeps the
+error instead of falling back to a helper-based layout. This keeps the
 unverified integration point visible and prevents solver behavior from being
 silently bypassed.
 
@@ -371,22 +322,21 @@ path:
 If the solver returns an error, the adapter should avoid applying partial
 placements.
 
-Phase 3 may return a readable error or keep the previous visible placement if
-available. Full last-valid-layout recovery is hardened later, but partial
-application of invalid solver output should be avoided from the start.
+The adapter may return a readable error or keep the previous visible placement if
+available. Partial application of invalid solver output must be avoided.
 
-### Phase 3 Acceptance Criteria
+### Guarantees
 
 - Recalculation calls the solver with normalized config, ordered targets and
   dimension modes.
-- Temporary columns placement is no longer the primary placement path.
+- Solver output is the primary placement path.
 - Solver rectangles are applied to the matching Hyprland targets.
 - Adapter-specific rectangle conversion is isolated in this file.
 - Solver errors do not produce partial placement updates.
 
-## Phase 4 Additions
+## Hardening
 
-Phase 4 connects logical focus commands and viewport offsets to Hyprland.
+The adapter connects logical focus commands and viewport offsets to Hyprland.
 
 The adapter remains the only module allowed to:
 
@@ -531,7 +481,7 @@ The adapter should not duplicate direction-specific rules.
 Fit Scroller owns every tiled target in the workspace, including targets
 outside the current viewport.
 
-Phase 4 must verify how Hyprland expects off-viewport targets to be placed:
+Tests must verify how Hyprland expects off-viewport targets to be placed:
 
 - placing them at their logical offscreen coordinates may be sufficient;
 - clamping or hiding them may cause incorrect focus behavior;
@@ -565,9 +515,9 @@ In normal operation this command should be triggered automatically by
 `init.lua` through `hl.on("window.active", ...)` when the active window belongs
 to `lua:fit-scroller`.
 
-## Phase 4 Runtime Checks
+## Runtime Checks
 
-Phase 4 should verify these integration points on the local Hyprland runtime:
+Tests must verify these integration points on the local Hyprland runtime:
 
 - Does the `window.active` listener dispatch `follow` without recursion or
   noisy errors?
@@ -577,7 +527,7 @@ Phase 4 should verify these integration points on the local Hyprland runtime:
 
 Observed answers should be documented here after testing.
 
-## Phase 4 Acceptance Criteria
+## Guarantees
 
 - `focus previous` and `focus next` use Hyprland's in-process Lua focus
   dispatcher.
@@ -588,9 +538,9 @@ Observed answers should be documented here after testing.
 - All placements are adjusted by `state.viewport_offset`.
 - The adapter still hides all Hyprland object details from core modules.
 
-## Phase 5 Additions
+## Hardening
 
-Phase 5 hardens the integration boundary.
+This section defines the integration boundary.
 
 The adapter is responsible for turning core module errors into safe Hyprland
 behavior. It should avoid crashes, avoid partial placement, preserve the last
@@ -672,7 +622,7 @@ over applying a misleading stale layout.
 
 ## Structural vs Viewport-Only Flow
 
-Phase 5 must preserve the separation introduced before hardening:
+The adapter must preserve this flow separation:
 
 - structural changes call the solver, then update the viewport if needed;
 - focus changes and `follow` reuse `state.last_layout` and update only the
@@ -748,7 +698,7 @@ fit-scroller: recovered with last valid layout after viewport error
 
 ## Integration Gap Documentation
 
-By the end of Phase 5, unresolved Hyprland behavior must be documented in this
+Before release, unresolved Hyprland behavior must be documented in this
 file with one of these statuses:
 
 - `resolved`;
@@ -767,7 +717,7 @@ The important gaps are:
 - off-viewport target placement behavior;
 - whether `layout_msg` success triggers recalculation.
 
-## Phase 5 Test Cases
+## Test Cases
 
 Adapter tests can use mocked `ctx` and `target` objects.
 
@@ -794,7 +744,7 @@ They should cover:
 Runtime checks on real Hyprland `0.55` should separately verify the API gaps
 listed above.
 
-## Phase 5 Acceptance Criteria
+## Guarantees
 
 - Recoverable failures preserve or reuse the last valid layout when safe.
 - `last_layout` updates only after complete successful placement.

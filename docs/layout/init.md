@@ -1,9 +1,5 @@
 # `layout/init.lua`
 
-## Phase
-
-Phase 1: Integration Skeleton.
-
 ## Purpose
 
 `init.lua` is the entry point loaded by Hyprland.
@@ -14,7 +10,7 @@ loading concerns do not spread into the core layout modules.
 
 ## Responsibilities
 
-In Phase 1, `init.lua` must:
+`init.lua` must:
 
 - load the Hyprland adapter module relative to `init.lua`;
 - register the layout as `fit-scroller`;
@@ -29,10 +25,9 @@ It must not:
 - parse Fit Scroller commands itself;
 - know about target identity, dimensions, traversal or solver details.
 
-Starting with focus-following integration, `init.lua` also owns global Hyprland
-Lua event subscription setup. This remains a thin integration role: event
-callbacks must only dispatch Fit Scroller layout messages and must not compute
-state or geometry themselves.
+`init.lua` also owns global Hyprland Lua event subscription setup. This remains
+a thin integration role: event callbacks must only dispatch Fit Scroller layout
+messages and must not compute state or geometry themselves.
 
 ## Hyprland Contract
 
@@ -90,7 +85,7 @@ layout/init.lua
 layout/hyprland_adapter.lua
 ```
 
-The Phase 1 implementation uses Lua's `debug.getinfo` to find the current
+The current implementation uses Lua's `debug.getinfo` to find the current
 file and `loadfile` to load `hyprland_adapter.lua` from the same directory.
 This keeps the layout directory relocatable as long as the files stay together.
 
@@ -105,7 +100,7 @@ should be explicit, such as shipping a bundled single-file layout or
 documenting an installation path constraint. Do not silently reintroduce a
 `require`-based dependency on the Hyprland configuration directory.
 
-## Phase 1 Behavior
+## Runtime Behavior
 
 ### `recalculate(ctx)`
 
@@ -116,7 +111,7 @@ adapter.recalculate(ctx)
 ```
 
 The adapter is responsible for reading `ctx.targets`, reading `ctx.area`, and
-placing windows with the temporary Phase 1 layout.
+placing windows with the current layout.
 
 ### `layout_msg(ctx, msg)`
 
@@ -126,8 +121,8 @@ placing windows with the temporary Phase 1 layout.
 adapter.layout_msg(ctx, msg)
 ```
 
-In Phase 1, no Fit Scroller command is implemented yet. Any message should
-return a readable unknown-command error through the adapter.
+Unsupported Fit Scroller commands should return a readable unknown-command error
+through the adapter.
 
 ## Error Handling
 
@@ -151,7 +146,7 @@ behavior should be added to:
 The exception is global Hyprland event registration. Event registration belongs
 in `init.lua` because it installs the layout into Hyprland's Lua runtime.
 
-## Phase 1 Acceptance Criteria
+## Guarantees
 
 - Hyprland lists or accepts the `fit-scroller` layout.
 - Switching to the layout does not crash with zero windows.

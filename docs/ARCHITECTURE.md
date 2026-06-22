@@ -21,7 +21,7 @@ examples:
 - `ctx.area`;
 - `target:place(area)`.
 
-The source-level Hyprland `0.55.4` API review is recorded in
+The source-level Hyprland Lua API review is recorded in
 `../references/hyprland-custom-layout-api.md`. It confirms additional
 integration points used by Fit Scroller:
 
@@ -46,7 +46,7 @@ The implementation must:
 - support focused tests for state synchronization, command behavior and layout
   selection.
 
-## Proposed File Structure
+## File Structure
 
 ```text
 layout/
@@ -62,15 +62,11 @@ layout/
     hyprland_adapter.lua
 ```
 
-For V1 this can still be shipped as a small Lua layout. The split above is a
-logical architecture; files may be merged temporarily during early
-implementation if Hyprland loading constraints require it.
-
 The implementation should load sibling modules relative to `layout/init.lua`,
 not relative to Hyprland's configuration directory or Lua `package.path`.
 Hyprland's import resolution may otherwise force users to install all modules
-under a specific configuration path. The Phase 1 loader resolves the current
-`init.lua` path and loads `hyprland_adapter.lua` from the same directory.
+under a specific configuration path. The loader resolves the current
+`init.lua` path and loads sibling modules from the same directory.
 
 ## Runtime Overview
 
@@ -241,9 +237,10 @@ Responsibilities:
 - discard forced dimensions when a window disappears;
 - provide safe accessors for commands and solver input.
 
-State must be keyed by workspace if the Hyprland API exposes a stable workspace
-identifier. If not, V1 should use the best available context identifier and
-document the limitation in the implementation.
+State must be keyed by workspace. Hyprland's Lua layout `ctx` does not expose
+workspace identity directly, but `target.window.workspace` exposes a workspace
+object with stable fields. The adapter should derive the state key from
+`workspace.id`, then `workspace.config_name`, then `workspace.name`.
 
 ### [`target_sync.lua`](layout/target_sync.md)
 
@@ -409,9 +406,9 @@ trigger or influence the solver.
 ### Target Identity
 
 Target identity should prefer `target.window.stable_id`, following the local
-`manual.lua` example. If unavailable, the adapter may fall back to
-`target.index`, but this fallback is weaker and should be treated as an
-integration limitation.
+`manual.lua` example. If unavailable, the adapter should fall back to
+`target.window.address` before using `target.index`. The index fallback is
+weaker and should be treated as an integration limitation.
 
 ### Window Insertion
 
@@ -490,108 +487,42 @@ Recommended test layers:
 The Hyprland adapter should be kept thin enough that most behavior can be
 verified with plain Lua tests.
 
-## Implementation Phases
+The canonical local test command is:
 
-### Phase 1: Integration Skeleton
+```bash
+lua tests/run.lua
+```
 
-- register the `fit-scroller` layout
-  ([`init.lua`](layout/init.md));
-- read targets and area
-  ([`hyprland_adapter.lua`](layout/hyprland_adapter.md));
-- place all windows using a trivial deterministic layout
-  ([`hyprland_adapter.lua`](layout/hyprland_adapter.md));
-- support unknown command errors
-  ([`hyprland_adapter.lua`](layout/hyprland_adapter.md)).
+Current test suites are grouped by subsystem:
 
-### Phase 2: State and Commands
+- `tests/core_test.lua` covers host-independent core behavior;
+- `tests/hyprland_adapter_test.lua` covers mocked Hyprland integration;
+- `tests/support.lua` contains shared test helpers;
+- `tests/run.lua` runs every suite.
 
-- implement target identity
-  ([`hyprland_adapter.lua`](layout/hyprland_adapter.md),
-  [`state.lua`](layout/state.md));
-- synchronize order
-  ([`target_sync.lua`](layout/target_sync.md));
-- implement `move previous` and `move next`
-  ([`commands.lua`](layout/commands.md));
-- implement `toggle dimension`
-  ([`commands.lua`](layout/commands.md),
-  [`config.lua`](layout/config.md));
-- store forced dimensions for window lifetime
-  ([`state.lua`](layout/state.md)).
+## Implementation Guarantees
 
-### Phase 3: Geometry and Solver
+Fit Scroller's implementation is expected to provide these guarantees:
 
-- implement dimensions and rectangles
-  ([`geometry.lua`](layout/geometry.md));
-- implement direction traversal
-  ([`traversal.lua`](layout/traversal.md));
-- implement order-mode layout generation
-  ([`solver.lua`](layout/solver.md));
-- implement `split` and `ajuste` tiling behavior
-  ([`solver.lua`](layout/solver.md));
-- apply selected placements
-  ([`solver.lua`](layout/solver.md),
-  [`hyprland_adapter.lua`](layout/hyprland_adapter.md)).
-
-### Phase 4: Focus and Viewport
-
-- implement `focus previous` and `focus next` through Hyprland's in-process
-  Lua focus dispatcher
-  ([`commands.lua`](layout/commands.md),
-  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
-- subscribe to `window.active` and dispatch `follow` for Fit Scroller windows
-  ([`init.lua`](layout/init.md),
-  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
-- implement focus reveal
-  ([`viewport.lua`](layout/viewport.md));
-- implement viewport offset clamping after removals
-  ([`viewport.lua`](layout/viewport.md)).
-
-### Phase 5: Hardening
-
-- validate configuration errors
-  ([`config.lua`](layout/config.md),
-  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
-- validate `tiling_mode` and `insert_mode`, including the default
-  `insert_mode = "view"`
-  ([`config.lua`](layout/config.md));
-- harden insertion behavior for `last`, `first`, `view`, `after_focused` and
-  `before_focused`
-  ([`target_sync.lua`](layout/target_sync.md));
-- preserve last valid layout on recoverable failures
-  ([`state.lua`](layout/state.md),
-  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
-- harden solver and viewport invalid-input behavior
-  ([`solver.lua`](layout/solver.md),
-  [`viewport.lua`](layout/viewport.md));
-- verify solver and viewport independence: focus changes and viewport changes
-  must never alter world-space placements or selected dimensions
-  ([`solver.lua`](layout/solver.md),
-  [`viewport.lua`](layout/viewport.md),
-  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
-- make state updates transactional for commands and recalculation: failed
-  validation, failed solving, failed viewport computation or failed placement
-  must not partially mutate workspace state
-  ([`state.lua`](layout/state.md),
-  [`commands.lua`](layout/commands.md),
-  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
-- update `state.last_layout` only after every target placement has been
-  computed and accepted
-  ([`state.lua`](layout/state.md),
-  [`hyprland_adapter.lua`](layout/hyprland_adapter.md));
-- add tests around edge cases
-  ([`config.lua`](layout/config.md),
-  [`target_sync.lua`](layout/target_sync.md),
-  [`commands.lua`](layout/commands.md),
-  [`geometry.lua`](layout/geometry.md),
-  [`traversal.lua`](layout/traversal.md),
-  [`solver.lua`](layout/solver.md),
-  [`viewport.lua`](layout/viewport.md));
-- document unsupported Hyprland API gaps if any remain
-  ([`hyprland_adapter.lua`](layout/hyprland_adapter.md)).
-
-Phase 5 is complete only when the module-level Phase 5 acceptance criteria are
-met and the regression tests cover the documented `split`, `ajuste`,
-`insert_mode`, focus-follow and last-layout recovery behavior.
+- the layout is registered as `fit-scroller` and exposed by Hyprland as
+  `lua:fit-scroller`;
+- all Hyprland object access is isolated in `init.lua` and
+  `hyprland_adapter.lua`;
+- target identity prefers `target.window.stable_id`, then `target.window.address`
+  before any index-based fallback;
+- workspace state is keyed from `target.window.workspace`, not from a global
+  state bucket;
+- target synchronization preserves logical order, inserts new targets according
+  to `insert_mode`, and removes per-window state only for windows absent from the
+  resolved workspace;
+- commands validate their intent and mutate state transactionally;
+- structural changes invoke the solver, while focus-only changes update viewport
+  offset without changing world-space placements or selected dimensions;
+- `state.last_layout` is updated only after solving, viewport computation,
+  rectangle conversion and target placement all succeed;
+- recoverable failures preserve the previous coherent workspace state and last
+  valid layout;
+- core modules remain testable without Hyprland.
 
 ## Integration Questions
 
@@ -712,23 +643,33 @@ Sources:
 - `../references/local/hyprland-layout-examples/spiral.lua`
 - `../references/hyprland-custom-layout-api.md`
 
-### Workspace identity in `ctx`
+### Workspace Identity
 
-Status: unresolved, requires runtime verification.
+Status: resolved from Hyprland source inspection.
 
-Hyprland exposes workspace information through `hyprctl workspaces`,
-`hyprctl activeworkspace` and IPC workspace events. The wiki does not show
-whether the Lua custom layout `ctx` exposes a stable workspace id.
+Hyprland's custom Lua layout context is built with `area`, `targets` and helper
+functions. It does not expose `ctx.workspace`, `ctx.monitor` or the recalculation
+reason.
+
+Workspace identity is exposed through `target.window.workspace`. The workspace
+object exposes `id`, `name` and `config_name`. The global Lua API also exposes
+`hl.get_workspaces()`, `hl.get_active_workspace(monitor?)`,
+`hl.get_active_special_workspace(monitor?)` and
+`hl.get_workspace_windows(workspace)`.
 
 Implementation requirement:
 
-- first look for a stable workspace identifier on `ctx`;
-- if unavailable, key state by the best available combination of monitor and
-  workspace name/id exposed to the layout;
-- document the chosen key in `docs/layout/state.md`;
+- derive the workspace key from target windows, preferring
+  `target.window.workspace.id`;
+- fall back to `workspace.config_name`, then `workspace.name`;
+- use global query helpers only for validation or recovery, not as the primary
+  identity path inside a layout pass;
 - avoid using global state that mixes independent workspaces.
 
 Sources:
 
-- <https://wiki.hypr.land/Configuring/Using-hyprctl/>
-- <https://wiki.hypr.land/IPC/>
+- <https://github.com/hyprwm/Hyprland/tree/5a7078d20a14bb199ef9bb81faa4faeaf5e92117>
+- `src/config/lua/layout/LuaLayoutContext.cpp`
+- `src/config/lua/objects/LuaWindow.cpp`
+- `src/config/lua/objects/LuaWorkspace.cpp`
+- `src/config/lua/bindings/LuaBindingsQuery.cpp`

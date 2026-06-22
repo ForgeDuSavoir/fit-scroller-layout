@@ -2,19 +2,23 @@
 
 ## Scope
 
-This document records Hyprland `0.55.4` custom layout API behavior verified
-from the official Hyprland source code.
+This document records Hyprland custom layout API behavior verified from the
+official Hyprland source code.
 
 Source tree inspected:
 
-- <https://github.com/hyprwm/Hyprland/tree/v0.55.4>
+- <https://github.com/hyprwm/Hyprland/tree/5a7078d20a14bb199ef9bb81faa4faeaf5e92117>
+- commit date: 2026-06-21
 
 Relevant source files:
 
 - `src/config/lua/layout/LuaLayoutProvider.cpp`
 - `src/config/lua/layout/LuaLayoutContext.cpp`
 - `src/config/lua/layout/LuaLayoutTarget.cpp`
+- `src/config/lua/objects/LuaWorkspace.cpp`
 - `src/config/lua/objects/LuaWindow.cpp`
+- `src/config/lua/objects/LuaMonitor.cpp`
+- `src/config/lua/bindings/LuaBindingsQuery.cpp`
 - `src/config/lua/LuaEventHandler.cpp`
 - `src/config/lua/bindings/LuaBindingsDispatchers.cpp`
 - `src/config/lua/bindings/LuaBindingsToplevel.cpp`
@@ -67,7 +71,8 @@ The custom layout context passed to `recalculate(ctx)` and
 ```
 
 The inspected source does not expose workspace identity, monitor identity or
-recalculate reason through `ctx`.
+recalculate reason through `ctx`. The context is built from the layout's live
+targets and the layout space work area only.
 
 ## Layout Target Object
 
@@ -119,6 +124,58 @@ should be:
 ```text
 lua:fit-scroller
 ```
+
+## Workspace And Window State
+
+`window.workspace` exposes the normal Lua workspace object. Relevant fields
+include:
+
+- `workspace.id`;
+- `workspace.name`;
+- `workspace.config_name`;
+- `workspace.monitor`;
+- `workspace.visible`;
+- `workspace.special`;
+- `workspace.active`;
+- `workspace.tiled_layout`;
+- `workspace.get_windows`.
+
+`window.monitor` exposes the normal Lua monitor object. Relevant fields include:
+
+- `monitor.id`;
+- `monitor.name`;
+- `monitor.active_workspace`;
+- `monitor.active_special_workspace`.
+
+The global Lua query API also exposes:
+
+```lua
+hl.get_windows(filters?)
+hl.get_workspaces()
+hl.get_workspace(selector)
+hl.get_active_workspace(monitor?)
+hl.get_active_special_workspace(monitor?)
+hl.get_workspace_windows(workspace)
+```
+
+`hl.get_windows` defaults to mapped windows and can filter by workspace,
+monitor, floating state, class, title and tag. `hl.get_workspace_windows`
+returns mapped windows for one workspace.
+
+Implications for Fit Scroller:
+
+- the workspace key must not depend on `ctx.workspace`, because it is not part of
+  the custom layout context;
+- the primary workspace key source is `target.window.workspace`;
+- prefer `workspace.id` for the key, with `workspace.config_name` or
+  `workspace.name` as fallback;
+- use `window.stable_id` as the primary window id, with `window.address` as a
+  fallback before any index-based fallback;
+- a target missing from the current `ctx.targets` is not necessarily closed; it
+  can belong to another workspace if state was looked up with the wrong key;
+- cleanup of per-window state should be scoped to the workspace identified from
+  the current targets, or validated against workspace/window query APIs when the
+  distinction matters.
 
 ## Layout Messages
 
@@ -207,3 +264,5 @@ Implication:
 6. Logical focus commands should resolve the Fit Scroller target id to
    `target.window.address`, build `address:<window.address>`, and call
    `hl.dispatch(hl.dsp.focus({ window = selector }))`.
+7. Workspace state should be keyed from `target.window.workspace.id` when
+   available, falling back to `workspace.config_name` or `workspace.name`.

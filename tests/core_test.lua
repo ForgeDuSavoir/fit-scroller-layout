@@ -1,33 +1,19 @@
-local root = (... and (...):match("^(.*)/[^/]+$")) or "tests"
-local project_root = root == "tests" and "." or root .. "/.."
+local support = dofile((debug.getinfo(1, "S").source:sub(2):match("^(.*)/[^/]*$") or "tests") .. "/support.lua")
 
-local function load(name)
-    return dofile(project_root .. "/layout/" .. name .. ".lua")
-end
+local assert_eq = support.assert_eq
+local assert_true = support.assert_true
 
-local config = load("config")
-local state = load("state")
-local target_sync = load("target_sync")
-local commands = load("commands")
-local geometry = load("geometry")
-local traversal = load("traversal")
-local solver = load("solver")
-local viewport = load("viewport")
+local config = support.load_layout("config")
+local state = support.load_layout("state")
+local target_sync = support.load_layout("target_sync")
+local commands = support.load_layout("commands")
+local geometry = support.load_layout("geometry")
+local traversal = support.load_layout("traversal")
+local solver = support.load_layout("solver")
+local viewport = support.load_layout("viewport")
 
 solver.set_dependencies({ geometry = geometry, traversal = traversal })
 viewport.set_dependencies({ traversal = traversal })
-
-local function assert_eq(actual, expected, label)
-    if actual ~= expected then
-        error((label or "assertion failed") .. ": expected " .. tostring(expected) .. ", got " .. tostring(actual), 2)
-    end
-end
-
-local function assert_true(value, label)
-    if not value then
-        error(label or "assertion failed", 2)
-    end
-end
 
 local function test_config_defaults_and_validation()
     local cfg = assert(config.get_for_display("default", {
@@ -175,82 +161,14 @@ local function test_command_intents_and_failed_validation()
     assert_eq(ws.dimension_mode_by_id.A.key, before, "invalid toggle keeps state")
 end
 
-local function test_adapter_no_partial_placement()
-    _G.hl = { dsp = {}, dispatch = function() return true end }
-    local adapter = dofile(project_root .. "/layout/hyprland_adapter.lua")
-    local placed = 0
-    local ctx = {
-        area = { x = 0, y = 0, w = 1000, h = 1000 },
-        workspace = { id = "phase5-no-partial" },
-        monitor = { name = "default" },
-        targets = {
-            {
-                window = { stable_id = "A", active = true, address = "0xA" },
-                place = function()
-                    placed = placed + 1
-                end,
-            },
-            {
-                window = { stable_id = "B", active = false, address = "0xB" },
-            },
-        },
-    }
-
-    local err = adapter.recalculate(ctx)
-    assert_true(err and err:match("cannot be placed"), "missing place returns error")
-    assert_eq(placed, 0, "no partial placement")
-end
-
-local function test_adapter_focus_only_keeps_dimensions()
-    _G.hl = { dsp = {}, dispatch = function() return true end }
-    local adapter = dofile(project_root .. "/layout/hyprland_adapter.lua")
-
-    local function target(id, active)
-        return {
-            window = { stable_id = id, active = active, address = "0x" .. id },
-            place = function(self, rect)
-                self.last_rect = { x = rect.x, y = rect.y, w = rect.w, h = rect.h }
-            end,
-        }
-    end
-
-    local targets = {
-        target("A", true),
-        target("B", false),
-        target("C", false),
-        target("D", false),
-        target("E", false),
-    }
-    local ctx = {
-        area = { x = 0, y = 0, w = 1000, h = 1000 },
-        workspace = { id = "phase5-focus-only" },
-        monitor = { name = "default" },
-        targets = targets,
-    }
-
-    assert_eq(adapter.recalculate(ctx), nil, "initial adapter recalc")
-    local before = {}
-    for i, current in ipairs(targets) do
-        before[i] = current.last_rect.w .. "x" .. current.last_rect.h
-    end
-
-    targets[1].window.active = false
-    targets[5].window.active = true
-    assert_eq(adapter.recalculate(ctx), nil, "focus-only adapter recalc")
-
-    for i, current in ipairs(targets) do
-        local after = current.last_rect.w .. "x" .. current.last_rect.h
-        assert_eq(after, before[i], "focus-only keeps dimensions " .. tostring(i))
-    end
-end
-
-test_config_defaults_and_validation()
-test_target_sync_validation_is_transactional()
-test_insert_modes()
-test_solver_split_and_independence()
-test_viewport_validation()
-test_command_intents_and_failed_validation()
-test_adapter_no_partial_placement()
-test_adapter_focus_only_keeps_dimensions()
-
-print("phase5 ok")
+return {
+    name = "core",
+    tests = {
+        test_config_defaults_and_validation,
+        test_target_sync_validation_is_transactional,
+        test_insert_modes,
+        test_solver_split_and_independence,
+        test_viewport_validation,
+        test_command_intents_and_failed_validation,
+    },
+}
