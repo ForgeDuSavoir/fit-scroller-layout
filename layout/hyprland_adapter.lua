@@ -1,5 +1,7 @@
 local M = {}
 
+M.version = "display-resolution-v4-area-monitor"
+
 local function current_dir()
     local source = debug and debug.getinfo(1, "S").source
     if type(source) ~= "string" or source:sub(1, 1) ~= "@" then
@@ -123,21 +125,152 @@ local function workspace_key(ctx)
     return "global"
 end
 
-local function display_id(ctx)
-    local monitor = ctx.monitor or ctx.output or ctx.display
-    if type(monitor) == "table" then
-        if monitor.name ~= nil then
-            return tostring(monitor.name)
-        end
-        if monitor.id ~= nil then
-            return "monitor:" .. tostring(monitor.id)
-        end
-    elseif monitor ~= nil then
-        return tostring(monitor)
+local function add_candidate(candidates, seen, value)
+    local value_type = type(value)
+    if value_type ~= "string" and value_type ~= "number" then
+        return
     end
 
-    return "default"
+    local candidate = tostring(value)
+    if candidate == "" or seen[candidate] then
+        return
+    end
+
+    seen[candidate] = true
+    table.insert(candidates, candidate)
 end
+
+local function safe_field(value, field)
+    if value == nil then
+        return nil
+    end
+
+    local ok, result = pcall(function()
+        return value[field]
+    end)
+    if not ok then
+        return nil
+    end
+
+    return result
+end
+
+local function add_monitor_candidates(candidates, seen, monitor)
+    local monitor_type = type(monitor)
+    if monitor_type == "table" or monitor_type == "userdata" then
+        add_candidate(candidates, seen, safe_field(monitor, "name"))
+        add_candidate(candidates, seen, safe_field(monitor, "output"))
+        local id = safe_field(monitor, "id")
+        if id ~= nil then
+            add_candidate(candidates, seen, "monitor:" .. tostring(id))
+        end
+        return
+    end
+
+    add_candidate(candidates, seen, monitor)
+end
+
+local function add_workspace_candidates(candidates, seen, workspace)
+    local workspace_type = type(workspace)
+    if workspace_type ~= "table" and workspace_type ~= "userdata" then
+        return
+    end
+
+    add_monitor_candidates(candidates, seen, safe_field(workspace, "monitor"))
+end
+
+local function safe_call(fn, ...)
+    if type(fn) ~= "function" then
+        return nil
+    end
+
+    local ok, result = pcall(fn, ...)
+    if not ok then
+        return nil
+    end
+
+    return result
+end
+
+local function add_area_monitor_candidate(candidates, seen, area)
+    if type(area) ~= "table" or not hl or type(hl.get_monitor_at) ~= "function" then
+        return
+    end
+
+    local x = area.x
+    local y = area.y
+    local w = area.w or area.width
+    local h = area.h or area.height
+    if type(x) ~= "number" or type(y) ~= "number" or type(w) ~= "number" or type(h) ~= "number" then
+        return
+    end
+
+    add_monitor_candidates(candidates, seen, safe_call(hl.get_monitor_at, {
+        x = x + (w / 2),
+        y = y + (h / 2),
+    }))
+end
+
+local function display_candidates(ctx)
+    local candidates = {}
+    local seen = {}
+
+    for _, target in ipairs(ctx.targets or {}) do
+        local window = target and safe_field(target, "window")
+        add_monitor_candidates(candidates, seen, safe_field(window, "monitor"))
+        add_workspace_candidates(candidates, seen, safe_field(window, "workspace"))
+    end
+
+    add_monitor_candidates(candidates, seen, ctx.monitor)
+    add_monitor_candidates(candidates, seen, ctx.output)
+    add_monitor_candidates(candidates, seen, ctx.display)
+    add_area_monitor_candidate(candidates, seen, ctx.area)
+
+    if hl then
+        add_workspace_candidates(candidates, seen, safe_call(hl.get_active_workspace))
+
+        local workspaces = safe_call(hl.get_workspaces)
+        if type(workspaces) == "table" then
+            for _, workspace in ipairs(workspaces) do
+                if type(workspace) == "table" and workspace.active then
+                    add_workspace_candidates(candidates, seen, workspace)
+                end
+            end
+        end
+
+        local windows = safe_call(hl.get_windows)
+        if type(windows) == "table" then
+            for _, window in ipairs(windows) do
+                local window_type = type(window)
+                if (window_type == "table" or window_type == "userdata") and safe_field(window, "active") then
+                    add_monitor_candidates(candidates, seen, safe_field(window, "monitor"))
+                    add_workspace_candidates(candidates, seen, safe_field(window, "workspace"))
+                end
+            end
+        end
+    end
+
+    return candidates
+end
+
+local function display_id(ctx)
+    local candidates = display_candidates(ctx)
+    local displays = type(config.raw_config) == "table" and config.raw_config.displays or nil
+
+    if type(displays) == "table" then
+        for _, candidate in ipairs(candidates) do
+            if displays[candidate] ~= nil then
+                return candidate
+            end
+        end
+    end
+
+    return candidates[1] or "default"
+end
+
+M._display_id = display_id
+M._display_candidates = display_candidates
+M._config = config
 
 local function workspace_context(ctx, workspace_state)
     local descriptors = target_descriptors(ctx.targets)
@@ -164,6 +297,20 @@ local function workspace_context(ctx, workspace_state)
         config = effective_config,
         sync = sync_result or {},
     }
+end
+
+local function config_signature(effective_config)
+    local parts = {
+        "display=" .. tostring(effective_config.display_id),
+        "direction=" .. tostring(effective_config.scroll_direction),
+        "insert=" .. tostring(effective_config.insert_mode),
+    }
+
+    for _, key in ipairs(effective_config.toggle_cycle or {}) do
+        table.insert(parts, "dimension=" .. tostring(key))
+    end
+
+    return table.concat(parts, ";")
 end
 
 local function descriptors_by_id(descriptors)
@@ -219,6 +366,33 @@ local function debug_targets(descriptors)
         ))
     end
 
+    return table.concat(lines, "\n")
+end
+
+local function debug_config(ctx)
+    local id = display_id(ctx)
+    local effective_config, err = config.get_for_display(id)
+    local lines = {
+        "fit-scroller debug config:",
+        "adapter_version=" .. tostring(M.version),
+        "resolved_display=" .. tostring(id),
+        "display_candidates=" .. table.concat(display_candidates(ctx), ", "),
+    }
+
+    local displays = type(config.raw_config) == "table" and config.raw_config.displays or nil
+    if type(displays) == "table" then
+        table.insert(lines, "configured_displays=" .. table.concat(sorted_keys(displays), ", "))
+    end
+
+    if not effective_config then
+        table.insert(lines, "error=" .. tostring(err))
+        return table.concat(lines, "\n")
+    end
+
+    table.insert(lines, "scroll_direction=" .. tostring(effective_config.scroll_direction))
+    table.insert(lines, "insert_mode=" .. tostring(effective_config.insert_mode))
+    table.insert(lines, "dimensions=" .. table.concat(effective_config.toggle_cycle or {}, ", "))
+    table.insert(lines, "config_signature=" .. config_signature(effective_config))
     return table.concat(lines, "\n")
 end
 
@@ -455,6 +629,7 @@ local function should_solve(workspace)
     return workspace.sync.structural_changed
         or workspace.state.pending_layout_update
         or workspace.state.last_layout == nil
+        or workspace.state.config_signature ~= config_signature(workspace.config)
 end
 
 local function reveal_target_id(workspace, did_solve)
@@ -527,6 +702,7 @@ function M.recalculate(ctx)
             dimensions_by_id = {},
             workspace_extent = 0,
         })
+        draft_state.config_signature = config_signature(workspace.config)
         state.set_viewport_offset(draft_state, 0)
         draft_state.pending_layout_update = false
         draft_state.pending_viewport_update = false
@@ -565,6 +741,7 @@ function M.recalculate(ctx)
     end
 
     state.update_last_layout(draft_state, layout)
+    draft_state.config_signature = config_signature(workspace.config)
     draft_state.pending_layout_update = false
     draft_state.pending_viewport_update = false
     state.commit_workspace_state(current_state, draft_state)
@@ -584,6 +761,10 @@ function M.layout_msg(ctx, msg)
 
     if type(msg) == "string" and msg:match("^%s*debug%s+targets%s*$") then
         return debug_targets(workspace.targets)
+    end
+
+    if type(msg) == "string" and msg:match("^%s*debug%s+config%s*$") then
+        return debug_config(ctx)
     end
 
     local result = commands.execute(workspace.state, workspace.config, state, config, msg)

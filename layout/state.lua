@@ -9,6 +9,7 @@ local function new_workspace_state()
         focused_id = nil,
         viewport_offset = 0,
         last_layout = nil,
+        config_signature = nil,
     }
 end
 
@@ -72,6 +73,7 @@ function M.clone_workspace_state(workspace_state)
         focused_id = workspace_state.focused_id,
         viewport_offset = workspace_state.viewport_offset or 0,
         last_layout = copy_layout(workspace_state.last_layout),
+        config_signature = workspace_state.config_signature,
         pending_layout_update = workspace_state.pending_layout_update,
         pending_viewport_update = workspace_state.pending_viewport_update,
     }
@@ -83,6 +85,7 @@ function M.commit_workspace_state(workspace_state, draft_state)
     workspace_state.focused_id = draft_state.focused_id
     workspace_state.viewport_offset = draft_state.viewport_offset or 0
     workspace_state.last_layout = copy_layout(draft_state.last_layout)
+    workspace_state.config_signature = draft_state.config_signature
     workspace_state.pending_layout_update = draft_state.pending_layout_update
     workspace_state.pending_viewport_update = draft_state.pending_viewport_update
 end

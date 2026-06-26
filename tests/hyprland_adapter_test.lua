@@ -123,11 +123,131 @@ local function test_adapter_workspace_switch_keeps_forced_dimensions()
     assert_eq(workspace_one_targets[1].last_rect.h, 1000, "forced height survives workspace switch")
 end
 
+local function test_adapter_display_id_uses_window_monitor_when_ctx_has_no_monitor()
+    local adapter = load_adapter()
+    local ctx = {
+        targets = {
+            {
+                window = {
+                    monitor = { name = "HDMI-A-1" },
+                },
+            },
+        },
+    }
+
+    assert_eq(adapter._display_id(ctx), "HDMI-A-1", "display id from window monitor")
+end
+
+local function test_adapter_display_id_prefers_configured_window_monitor_over_ctx_monitor()
+    local adapter = load_adapter()
+    adapter._config.raw_config.displays["HDMI-A-1"] = {
+        allowed_dimensions = { { 1.0, 1.0 } },
+        scroll_direction = "down",
+    }
+
+    local ctx = {
+        monitor = function() end,
+        targets = {
+            {
+                window = {
+                    monitor = { name = "HDMI-A-1" },
+                },
+            },
+        },
+    }
+
+    assert_eq(adapter._display_id(ctx), "HDMI-A-1", "configured window monitor wins")
+end
+
+local function test_adapter_display_id_uses_active_workspace_monitor_when_ctx_has_no_targets()
+    _G.hl = {
+        dsp = {},
+        dispatch = function() return true end,
+        get_active_workspace = function()
+            return {
+                monitor = { name = "HDMI-A-1" },
+            }
+        end,
+    }
+
+    local adapter = support.load_layout("hyprland_adapter")
+    adapter._config.raw_config.displays["HDMI-A-1"] = {
+        allowed_dimensions = { { 1.0, 1.0 } },
+        scroll_direction = "down",
+    }
+
+    assert_eq(adapter._display_id({}), "HDMI-A-1", "display id from active workspace monitor")
+end
+
+local function test_adapter_display_id_uses_area_monitor_when_ctx_has_no_targets()
+    local monitor = setmetatable({}, {
+        __index = function(_, key)
+            if key == "name" then
+                return "HDMI-A-1"
+            end
+        end,
+    })
+
+    _G.hl = {
+        dsp = {},
+        dispatch = function() return true end,
+        get_monitor_at = function(point)
+            if point.x == 1500 and point.y == 500 then
+                return monitor
+            end
+        end,
+    }
+
+    local adapter = support.load_layout("hyprland_adapter")
+    adapter._config.raw_config.displays["HDMI-A-1"] = {
+        allowed_dimensions = { { 1.0, 1.0 } },
+        scroll_direction = "down",
+    }
+
+    assert_eq(adapter._display_id({
+        area = { x = 1000, y = 0, w = 1000, h = 1000 },
+    }), "HDMI-A-1", "display id from area monitor")
+end
+
+local function test_adapter_resolves_layout_again_when_display_config_changes()
+    local adapter = load_adapter()
+    adapter._config.raw_config.displays["HDMI-A-1"] = {
+        allowed_dimensions = {
+            { 1.0, 1.0 },
+            { 1.0, 0.5 },
+        },
+        scroll_direction = "down",
+    }
+
+    local targets = {
+        placed_target("A", "display-config-change", true),
+        placed_target("B", "display-config-change", false),
+    }
+    local ctx = {
+        area = { x = 0, y = 0, w = 1000, h = 1000 },
+        monitor = { name = "default" },
+        targets = targets,
+    }
+
+    assert_eq(adapter.recalculate(ctx), nil, "initial default display recalc")
+    assert_eq(targets[2].last_rect.x, 500, "default display places second target horizontally")
+
+    ctx.monitor.name = "HDMI-A-1"
+    assert_eq(adapter.recalculate(ctx), nil, "override display recalc")
+    assert_eq(targets[2].last_rect.x, 0, "override display recalculates x")
+    assert_eq(targets[2].last_rect.y, 500, "override display places second target vertically")
+end
+
 return {
     name = "hyprland_adapter",
     tests = {
         test_adapter_no_partial_placement,
         test_adapter_focus_only_keeps_dimensions,
         test_adapter_workspace_switch_keeps_forced_dimensions,
+        test_adapter_display_id_uses_window_monitor_when_ctx_has_no_monitor,
+        test_adapter_display_id_prefers_configured_window_monitor_over_ctx_monitor,
+        test_adapter_display_id_uses_active_workspace_monitor_when_ctx_has_no_targets,
+        test_adapter_display_id_uses_area_monitor_when_ctx_has_no_targets,
+        test_adapter_resolves_layout_again_when_display_config_changes,
     },
 }
