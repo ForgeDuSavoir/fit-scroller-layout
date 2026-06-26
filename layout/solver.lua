@@ -2,6 +2,7 @@ local M = {}
 
 local geometry = nil
 local traversal = nil
+local unpack_table = table.unpack or unpack
 
 function M.set_dependencies(dependencies)
     geometry = dependencies.geometry
@@ -64,20 +65,6 @@ local function canonical_dimension(dimension, direction)
     return dimension
 end
 
-local function rect_fits(rect, existing)
-    if rect.x < 0 or rect.y < 0 or rect.y + rect.h > 1 + 0.0000001 then
-        return false
-    end
-
-    for _, placed in ipairs(existing) do
-        if geometry.overlaps(rect, placed) then
-            return false
-        end
-    end
-
-    return true
-end
-
 local function rect_extent(rect)
     return rect.x + rect.w
 end
@@ -88,79 +75,6 @@ local function layout_extent(placements)
         extent = math.max(extent, rect_extent(rect))
     end
     return extent
-end
-
-local function sorted_unique(values)
-    table.sort(values)
-
-    local out = {}
-    local last = nil
-    for _, value in ipairs(values) do
-        if last == nil or math.abs(value - last) > 0.0000001 then
-            table.insert(out, value)
-            last = value
-        end
-    end
-
-    return out
-end
-
-local function place_in_region(region_x, w, h, existing)
-    local xs = { region_x }
-    local ys = { 0 }
-
-    for _, rect in ipairs(existing) do
-        if rect.x >= region_x and rect.x < region_x + 1 then
-            table.insert(xs, rect.x)
-            table.insert(xs, rect.x + rect.w)
-            table.insert(ys, rect.y)
-            table.insert(ys, rect.y + rect.h)
-        end
-    end
-
-    xs = sorted_unique(xs)
-    ys = sorted_unique(ys)
-
-    for _, x in ipairs(xs) do
-        for _, y in ipairs(ys) do
-            local rect = geometry.rect(x, y, w, h)
-            if x + w <= region_x + 1 + 0.0000001 and rect_fits(rect, existing) then
-                return rect
-            end
-        end
-    end
-end
-
-local function pack_candidate(input, dimensions_by_target_id)
-    local placements = {}
-    local dimensions = {}
-    local existing = {}
-    local region_x = 0
-
-    for _, target in ipairs(input.targets) do
-        local dimension = dimensions_by_target_id[target.id]
-        local packed_dimension = canonical_dimension(dimension, input.config.scroll_direction)
-
-        if packed_dimension.h > 1 then
-            return nil, "dimension " .. dimension.key .. " does not fit on the cross axis for target " .. tostring(target.id)
-        end
-
-        local rect = place_in_region(region_x, packed_dimension.w, packed_dimension.h, existing)
-        while not rect do
-            region_x = region_x + 1
-            rect = place_in_region(region_x, packed_dimension.w, packed_dimension.h, existing)
-        end
-
-        placements[target.id] = rect
-        dimensions[target.id] = dimension
-        table.insert(existing, rect)
-    end
-
-    return {
-        placements_by_id = placements,
-        dimensions_by_id = dimensions,
-        workspace_extent = layout_extent(placements),
-    }
 end
 
 local function rank_candidate(candidate, input)
@@ -190,6 +104,314 @@ local function compare_candidates(a, b)
     return false
 end
 
+local function nearly_equal(a, b)
+    return math.abs(a - b) <= 0.0000001
+end
+
+local function canonical_dimension_items(config)
+    local items = {}
+    for _, dimension in ipairs(config.allowed_dimensions or {}) do
+        local canonical = canonical_dimension(dimension, config.scroll_direction)
+        table.insert(items, {
+            dimension = dimension,
+            key = dimension.key,
+            scroll_size = canonical.w,
+            cross_size = canonical.h,
+            area = canonical.w * canonical.h,
+        })
+    end
+
+    table.sort(items, function(a, b)
+        if not nearly_equal(a.area, b.area) then
+            return a.area > b.area
+        end
+        if not nearly_equal(a.cross_size, b.cross_size) then
+            return a.cross_size > b.cross_size
+        end
+        if not nearly_equal(a.scroll_size, b.scroll_size) then
+            return a.scroll_size < b.scroll_size
+        end
+        return a.key < b.key
+    end)
+
+    return items
+end
+
+local function smallest_scroll_size(items)
+    local size = nil
+    for _, item in ipairs(items) do
+        size = size and math.min(size, item.scroll_size) or item.scroll_size
+    end
+    return size or 1
+end
+
+local function append_unique_number(values, value)
+    for _, existing in ipairs(values) do
+        if nearly_equal(existing, value) then
+            return
+        end
+    end
+    table.insert(values, value)
+end
+
+local function pattern_cross_range(pattern)
+    local min_cross = nil
+    local max_cross = nil
+    for _, item in ipairs(pattern.items) do
+        min_cross = min_cross and math.min(min_cross, item.cross_size) or item.cross_size
+        max_cross = max_cross and math.max(max_cross, item.cross_size) or item.cross_size
+    end
+    return (max_cross or 0) - (min_cross or 0)
+end
+
+local function pattern_key(pattern)
+    local keys = {}
+    for i, item in ipairs(pattern.items) do
+        keys[i] = item.key
+    end
+    return table.concat(keys, "|")
+end
+
+local function pattern_area(pattern)
+    local area = 0
+    for _, item in ipairs(pattern.items) do
+        area = area + item.area
+    end
+    return area
+end
+
+local function pattern_fill_value(pattern)
+    if math.abs(pattern.cross_fill - 1) <= 0.011 then
+        return 1
+    end
+    return pattern.cross_fill
+end
+
+local function compare_column_patterns(a, b)
+    local fill_a = pattern_fill_value(a)
+    local fill_b = pattern_fill_value(b)
+    if not nearly_equal(fill_a, fill_b) then
+        return fill_a > fill_b
+    end
+
+    local exact_a = math.abs(a.cross_fill - 1) <= 0.011
+    local exact_b = math.abs(b.cross_fill - 1) <= 0.011
+    if exact_a ~= exact_b then
+        return exact_a
+    end
+
+    local range_a = pattern_cross_range(a)
+    local range_b = pattern_cross_range(b)
+    if not nearly_equal(range_a, range_b) then
+        return range_a < range_b
+    end
+
+    local area_a = pattern_area(a)
+    local area_b = pattern_area(b)
+    if not nearly_equal(area_a, area_b) then
+        return area_a > area_b
+    end
+
+    return pattern_key(a) < pattern_key(b)
+end
+
+local function append_best_patterns(target, source, limit)
+    table.sort(source, compare_column_patterns)
+    for i = 1, math.min(limit, #source) do
+        table.insert(target, source[i])
+    end
+end
+
+local function forced_item_for_target(input, target, items_by_key)
+    local forced, forced_err = forced_dimension_for_target(input, target)
+    if forced_err then
+        return nil, forced_err
+    end
+    if forced then
+        local item = items_by_key[forced.key]
+        if not item then
+            return nil, "forced dimension " .. tostring(forced.key) .. " is not allowed for target " .. tostring(target.id)
+        end
+        if item.cross_size > 1 + 0.0000001 then
+            return nil, "dimension " .. forced.key .. " does not fit on the cross axis for target " .. tostring(target.id)
+        end
+        return item
+    end
+end
+
+local function column_scroll_sizes(input, start_index, end_index, items, items_by_key)
+    local forced_scroll_size = nil
+    local has_forced = false
+
+    for i = start_index, end_index do
+        local forced, forced_err = forced_item_for_target(input, input.targets[i], items_by_key)
+        if forced_err then
+            return nil, forced_err
+        end
+        if forced then
+            has_forced = true
+            if forced_scroll_size and not nearly_equal(forced_scroll_size, forced.scroll_size) then
+                return {}
+            end
+            forced_scroll_size = forced.scroll_size
+        end
+    end
+
+    if has_forced then
+        return { forced_scroll_size }
+    end
+
+    local sizes = {}
+    for _, item in ipairs(items) do
+        append_unique_number(sizes, item.scroll_size)
+    end
+    table.sort(sizes)
+    return sizes
+end
+
+local function dimension_options_for_target(input, target, scroll_size, items, items_by_key)
+    local forced, forced_err = forced_item_for_target(input, target, items_by_key)
+    if forced_err then
+        return nil, forced_err
+    end
+    if forced then
+        if nearly_equal(forced.scroll_size, scroll_size) then
+            return { forced }
+        end
+        return {}
+    end
+
+    local options = {}
+    for _, item in ipairs(items) do
+        if nearly_equal(item.scroll_size, scroll_size) and item.cross_size <= 1 + 0.0000001 then
+            table.insert(options, item)
+        end
+    end
+    return options
+end
+
+local function generate_column_patterns(input, start_index, end_index, items, items_by_key)
+    local scroll_sizes, scroll_err = column_scroll_sizes(input, start_index, end_index, items, items_by_key)
+    if not scroll_sizes then
+        return nil, scroll_err
+    end
+
+    local patterns = {}
+    for _, scroll_size in ipairs(scroll_sizes) do
+        local scroll_patterns = {}
+        local options_by_index = {}
+        local can_use_scroll_size = true
+
+        for index = start_index, end_index do
+            local target = input.targets[index]
+            local forced, forced_err = forced_item_for_target(input, target, items_by_key)
+            if forced_err then
+                return nil, forced_err
+            end
+
+            if forced and forced.cross_size >= 1 - 0.0000001 and start_index ~= end_index then
+                can_use_scroll_size = false
+                break
+            end
+
+            local options, options_err = dimension_options_for_target(input, target, scroll_size, items, items_by_key)
+            if not options then
+                return nil, options_err
+            end
+            if #options == 0 then
+                can_use_scroll_size = false
+                break
+            end
+
+            options_by_index[index] = options
+        end
+
+        if can_use_scroll_size then
+            local min_remaining_cross = {}
+            min_remaining_cross[end_index + 1] = 0
+            for index = end_index, start_index, -1 do
+                local min_cross = nil
+                for _, item in ipairs(options_by_index[index]) do
+                    min_cross = min_cross and math.min(min_cross, item.cross_size) or item.cross_size
+                end
+                min_remaining_cross[index] = min_cross + min_remaining_cross[index + 1]
+            end
+
+            if min_remaining_cross[start_index] <= 1 + 0.0000001 then
+                local chosen = {}
+
+                local function generate_at(index, cross_sum)
+                    if cross_sum + min_remaining_cross[index] > 1 + 0.0000001 then
+                        return true
+                    end
+
+                    if index > end_index then
+                        table.insert(scroll_patterns, {
+                            scroll_size = scroll_size,
+                            cross_fill = cross_sum,
+                            items = { unpack_table(chosen) },
+                        })
+                        return true
+                    end
+
+                    for _, item in ipairs(options_by_index[index]) do
+                        if cross_sum + item.cross_size <= 1 + 0.0000001 then
+                            table.insert(chosen, item)
+                            local ok, generation_err = generate_at(index + 1, cross_sum + item.cross_size)
+                            table.remove(chosen)
+                            if not ok then
+                                return nil, generation_err
+                            end
+                        end
+                    end
+
+                    return true
+                end
+
+                local ok, pattern_err = generate_at(start_index, 0)
+                if not ok then
+                    return nil, pattern_err
+                end
+
+                append_best_patterns(patterns, scroll_patterns, 1)
+            end
+        end
+    end
+
+    return patterns
+end
+
+local function build_candidate_from_columns(input, columns)
+    local placements = {}
+    local dimensions = {}
+    local candidate_columns = {}
+    local x = 0
+
+    for column_index, column in ipairs(columns) do
+        local y = 0
+        candidate_columns[column_index] = {
+            start_index = column.start_index,
+            end_index = column.end_index,
+            pattern = column.pattern,
+        }
+
+        for offset, item in ipairs(column.pattern.items) do
+            local target = input.targets[column.start_index + offset - 1]
+            placements[target.id] = geometry.rect(x, y, item.scroll_size, item.cross_size)
+            dimensions[target.id] = item.dimension
+            y = y + item.cross_size
+        end
+        x = x + column.pattern.scroll_size
+    end
+
+    return {
+        placements_by_id = placements,
+        dimensions_by_id = dimensions,
+        workspace_extent = layout_extent(placements),
+        columns = candidate_columns,
+    }
+end
+
 local function transform_layout(candidate, direction)
     if direction == "right" then
         return candidate
@@ -206,44 +428,56 @@ end
 
 function M.generate_candidates(input)
     local candidates = {}
-    local dimensions_by_target_id = {}
+    local items = canonical_dimension_items(input.config)
+    local items_by_key = {}
+    for _, item in ipairs(items) do
+        items_by_key[item.key] = item
+    end
 
-    local function generate(index)
-        if index > #input.targets then
-            local candidate, candidate_err = pack_candidate(input, dimensions_by_target_id)
-            if not candidate then
-                return nil, candidate_err
-            end
+    local columns = {}
+    local max_candidates = 20000
+    local max_extent = math.max(3, #input.targets * smallest_scroll_size(items))
 
+    local function generate_from(start_index, current_extent)
+        if #candidates >= max_candidates then
+            return true
+        end
+
+        if start_index > #input.targets then
+            local candidate = build_candidate_from_columns(input, columns)
             rank_candidate(candidate, input)
             table.insert(candidates, candidate)
             return true
         end
 
-        local target = input.targets[index]
-        local forced, forced_err = forced_dimension_for_target(input, target)
-        if forced_err then
-            return nil, forced_err
-        end
+        for end_index = #input.targets, start_index, -1 do
+            local patterns, patterns_err = generate_column_patterns(input, start_index, end_index, items, items_by_key)
+            if not patterns then
+                return nil, patterns_err
+            end
 
-        if forced then
-            dimensions_by_target_id[target.id] = forced
-            return generate(index + 1)
-        end
+            for _, pattern in ipairs(patterns) do
+                local next_extent = current_extent + pattern.scroll_size
+                if next_extent <= max_extent + 0.0000001 or #candidates == 0 then
+                    table.insert(columns, {
+                        start_index = start_index,
+                        end_index = end_index,
+                        pattern = pattern,
+                    })
 
-        for _, dimension in ipairs(input.config.allowed_dimensions) do
-            dimensions_by_target_id[target.id] = dimension
-            local ok, generation_err = generate(index + 1)
-            if not ok then
-                return nil, generation_err
+                    local ok, generation_err = generate_from(end_index + 1, next_extent)
+                    table.remove(columns)
+                    if not ok then
+                        return nil, generation_err
+                    end
+                end
             end
         end
 
-        dimensions_by_target_id[target.id] = nil
         return true
     end
 
-    local ok, generation_err = generate(1)
+    local ok, generation_err = generate_from(1, 0)
     if not ok then
         return nil, generation_err
     end

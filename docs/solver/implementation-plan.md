@@ -124,6 +124,8 @@ Validation:
 
 ### Step 4: Implement Column-Based Candidate Generation
 
+Status: completed.
+
 Generate candidates using ordered column partitions.
 
 For canonical `right`:
