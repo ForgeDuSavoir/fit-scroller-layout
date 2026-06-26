@@ -49,12 +49,6 @@ Decision:
 - they are not validated, copied into display overrides or exposed in the
   normalized configuration.
 
-Temporary compatibility note:
-
-- until Step 3 replaces the old solver branching, `layout/solver.lua` may still
-  tolerate a missing solver mode internally so the existing test suite remains
-  green between incremental steps.
-
 Validation:
 
 - `rg tiling_mode layout/config.lua tests/core_test.lua` should return no
@@ -96,6 +90,8 @@ Expected initial result:
 - many new solver example tests may fail before the solver is replaced.
 
 ### Step 3: Replace Old Solver Branching With One Strategy
+
+Status: completed.
 
 In `layout/solver.lua`:
 
