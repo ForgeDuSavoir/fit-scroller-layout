@@ -3,6 +3,7 @@ local support = dofile(test_dir .. "/support.lua")
 
 local suites = {
     dofile(test_dir .. "/core_test.lua"),
+    dofile(test_dir .. "/solver_examples_test.lua"),
     dofile(test_dir .. "/hyprland_adapter_test.lua"),
 }
 

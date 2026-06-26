@@ -63,6 +63,8 @@ Validation:
 
 ### Step 2: Add Official Solver Example Tests
 
+Status: completed.
+
 Add a dedicated solver example test file, for example:
 
 ```text
