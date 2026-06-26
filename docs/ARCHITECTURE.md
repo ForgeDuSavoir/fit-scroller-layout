@@ -200,7 +200,6 @@ Responsibilities:
 - resolve configuration for the current display;
 - provide `allowed_dimensions`;
 - provide `scroll_direction`;
-- provide `tiling_mode`;
 - provide `insert_mode`;
 - support display-specific overrides;
 - reject invalid dimensions;

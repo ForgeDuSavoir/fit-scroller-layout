@@ -76,7 +76,6 @@ M.raw_config = {
             { 0.5, 0.5 },
         },
         scroll_direction = "right",
-        tiling_mode = "split",
         insert_mode = "view",
     },
     displays = {},
@@ -117,20 +116,6 @@ Valid values:
 This controls where the workspace extends when windows no longer fit inside
 the visible viewport.
 
-### `tiling_mode`
-
-Valid values:
-
-- `split`;
-- `ajuste`.
-
-`split` is the default. It splits the largest existing slot when possible, then
-falls back to `ajuste` when no valid split exists.
-
-`ajuste` directly chooses dimensions that keep window sizes as equivalent as
-possible, then minimizes scroll.
-
-This is useful especially for larger displays with more allowed dimensions. It has no impact with the default configuration.
 ### `insert_mode`
 
 Valid values:
@@ -170,7 +155,6 @@ M.raw_config = {
             { 0.5, 0.5 },
         },
         scroll_direction = "right",
-        tiling_mode = "split",
         insert_mode = "view",
     },
     displays = {
@@ -188,7 +172,6 @@ M.raw_config = {
                 { 0.5, 0.5 },
             },
             scroll_direction = "right",
-            tiling_mode = "split",
             insert_mode = "view",
         },
     },
@@ -321,7 +304,6 @@ Common causes:
 
 - invalid `allowed_dimensions`;
 - invalid `scroll_direction`;
-- invalid `tiling_mode`;
 - invalid `insert_mode`;
 - unsupported command text;
 - missing Hyprland window address for focus commands.

@@ -141,8 +141,7 @@ The solver must:
    tie-breakers;
 6. transform the selected canonical layout back to the configured direction.
 
-There is no separate semantic solver mode for `split` or `ajuste` in the
-current official solver behavior.
+The current official solver behavior uses one candidate-based strategy.
 
 The complete candidate model, forced-dimension rules, ranking rules and
 examples are documented in

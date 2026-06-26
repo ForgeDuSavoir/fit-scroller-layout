@@ -449,7 +449,7 @@ The solver should follow this conceptual flow:
 
 The selected candidate is the first candidate according to the ranking rules.
 
-No special `tiling_mode` is needed.
+No configurable solver mode is needed.
 
 Forced dimensions must not trigger a separate solver mode. They are constraints
 inside the same candidate search.

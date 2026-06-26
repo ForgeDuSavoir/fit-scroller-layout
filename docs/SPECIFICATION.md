@@ -103,10 +103,10 @@ The scroll translation applied when displaying a layout.
 Viewport offset is not part of layout solving. It is applied after a layout has
 already been computed.
 
-### Tiling mode
+### Solver strategy
 
-The strategy used by the solver to assign dimensions and world-space
-positions.
+The solver assigns dimensions and world-space positions by generating and
+ranking order-preserving layout candidates.
 
 Version 1 supports an order-based tiling model. Spatial tiling, where
 placement is chosen from directional adjacency such as left, right, up and
@@ -130,7 +130,6 @@ is used.
 
 - `allowed_dimensions`: a non-empty set of allowed dimensions;
 - `scroll_direction`: one of `right`, `left`, `down` or `up`;
-- `tiling_mode`: one of `split` or `ajuste`;
 - `insert_mode`: one of `last`, `first`, `view`, `after_focused` or
   `before_focused`.
 
@@ -149,21 +148,6 @@ Duplicate dimensions are invalid.
 
 The order of `allowed_dimensions` has no semantic meaning. It must not affect
 layout selection, dimension sizing or tie-breaking.
-
-### Tiling mode values
-
-`tiling_mode = "split"`:
-
-- prefer incremental splitting of the largest existing slot;
-- if the largest slot cannot be split into two configured allowed dimensions,
-  fall back to the `ajuste` strategy.
-
-`tiling_mode = "ajuste"`:
-
-- choose dimensions that make window sizes as equivalent as possible;
-- when perfect equivalence is impossible, choose the valid layout with the
-  smallest size differences while still preserving order, filling visible
-  space and minimizing scroll.
 
 ### Insert mode values
 
@@ -362,55 +346,20 @@ changed, but that viewport update is a separate step after solver completion.
 
 ### Solver philosophy
 
-The solver follows these priorities:
+The solver uses a single candidate-based strategy.
 
-1. fill the visible space;
-2. preserve logical window order;
-3. keep scroll as small as possible while respecting the previous priorities.
+It follows these priorities:
 
-The solver must use only configured allowed dimensions.
+1. preserve logical window order;
+2. use only configured allowed dimensions;
+3. preserve forced dimensions exactly;
+4. avoid scrolling whenever a valid no-scroll layout exists;
+5. when scrolling is unavoidable, keep scroll as small as possible;
+6. fill visible space with practical dimensions;
+7. choose deterministic results when candidates are otherwise equivalent.
 
-### `split` tiling mode
-
-`split` is an incremental order-preserving strategy.
-
-The solver maintains ordered slots. Each slot has a dimension and a world-space
-position. Windows are assigned to slots in logical order.
-
-Algorithm:
-
-1. Start with one full viewport slot.
-2. If more slots are needed, find the largest existing slot.
-3. Check whether that slot can be replaced by two slots whose dimensions are
-   both configured allowed dimensions and whose union exactly fills the
-   original slot.
-4. If the split is possible, replace the original slot with the two new slots
-   and preserve traversal order.
-5. If the split is not possible, use the `ajuste` strategy for the required
-   window count.
-6. If all existing visible slots are minimum practical size and more windows
-   are needed, append new slots along the scroll axis. The appended slot uses
-   the smallest allowed scroll-axis size that minimizes additional scroll and
-   the largest allowed cross-axis size that fills visible space.
-
-For horizontal scrolling, this means a new overflow column should be as narrow
-as allowed and as tall as allowed.
-
-### `ajuste` tiling mode
-
-`ajuste` computes a valid order-preserving layout directly for the current
-window count.
-
-The solver should:
-
-1. generate valid order-preserving layouts using only allowed dimensions;
-2. prefer layouts where all windows have the same dimension;
-3. when equal dimensions are impossible, prefer the layout with the smallest
-   difference between window areas;
-4. then prefer the smallest workspace extent along the scroll axis;
-5. use stable canonical position order only as a final tie-breaker.
-
-`ajuste` does not first attempt the incremental largest-slot split.
+The detailed candidate model, ranking rules and validation examples are
+documented in [solver/README.md](solver/README.md).
 
 ### Reflow stability
 
@@ -623,7 +572,6 @@ allowed_dimensions = {
     { 0.5, 0.5 },
 }
 scroll_direction = "right"
-tiling_mode = "split"
 ```
 
 ### Basic fitting
@@ -646,8 +594,8 @@ Expected order-preserving sequence:
 2 windows: A and B use 0.5 x 1.0
 3 windows: A and B split the first column; C uses the second column
 4 windows: A/B and C/D form two half-width columns
-5 windows: E is appended as the next narrow full-height column
-6 windows: E/F split that appended column
+5 windows: E is appended as the next half-width full-height column
+6 windows: E/F form the next half-width column
 ```
 
 ### Focus reveal
