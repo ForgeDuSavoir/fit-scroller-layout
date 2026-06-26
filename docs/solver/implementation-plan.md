@@ -32,6 +32,8 @@ known state.
 
 ### Step 1: Remove `tiling_mode` From Configuration
 
+Status: completed.
+
 - Remove `VALID_TILING_MODES` from `layout/config.lua`.
 - Remove `tiling_mode` from the default raw configuration.
 - Remove `tiling_mode` validation.
@@ -40,6 +42,18 @@ known state.
 - Update config tests that currently expect `tiling_mode = "split"`.
 - Decide and document whether unknown legacy `tiling_mode` fields are ignored
   or rejected.
+
+Decision:
+
+- legacy `tiling_mode` fields are ignored by configuration normalization;
+- they are not validated, copied into display overrides or exposed in the
+  normalized configuration.
+
+Temporary compatibility note:
+
+- until Step 3 replaces the old solver branching, `layout/solver.lua` may still
+  tolerate a missing solver mode internally so the existing test suite remains
+  green between incremental steps.
 
 Validation:
 
@@ -241,4 +255,3 @@ The implementation is complete when:
 - forced dimensions are always preserved or rejected with an error;
 - `0.99` third-based fills are treated as complete fills;
 - obsolete split/ajuste tests are removed or rewritten.
-

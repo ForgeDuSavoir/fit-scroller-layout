@@ -486,8 +486,9 @@ function M.solve(input)
         return err("unsupported scroll direction: " .. tostring(input.config.scroll_direction))
     end
 
-    if input.config.tiling_mode ~= "split" and input.config.tiling_mode ~= "ajuste" then
-        return err("unsupported tiling mode: " .. tostring(input.config.tiling_mode))
+    local tiling_mode = input.config.tiling_mode or "split"
+    if tiling_mode ~= "split" and tiling_mode ~= "ajuste" then
+        return err("unsupported tiling mode: " .. tostring(tiling_mode))
     end
 
     if type(input.config.dimensions_by_key) ~= "table" then
@@ -535,7 +536,7 @@ function M.solve(input)
     local best = nil
     local split_err = nil
 
-    if input.config.tiling_mode == "split" then
+    if tiling_mode == "split" then
         best, split_err = solve_split(input)
     end
 

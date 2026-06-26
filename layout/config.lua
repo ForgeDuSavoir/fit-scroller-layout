@@ -7,11 +7,6 @@ local VALID_DIRECTIONS = {
     up = true,
 }
 
-local VALID_TILING_MODES = {
-    split = true,
-    ajuste = true,
-}
-
 local VALID_INSERT_MODES = {
     last = true,
     first = true,
@@ -28,7 +23,6 @@ M.raw_config = {
             { 0.5, 0.5 },
         },
         scroll_direction = "right",
-        tiling_mode = "split",
         insert_mode = "view",
     },
     displays = {},
@@ -96,11 +90,6 @@ local function normalize(raw_display_config, display_id)
         return nil, "fit-scroller: display " .. tostring(display_id) .. " scroll_direction must be one of right, left, down, up"
     end
 
-    local tiling_mode = raw_display_config.tiling_mode or "split"
-    if not VALID_TILING_MODES[tiling_mode] then
-        return nil, "fit-scroller: display " .. tostring(display_id) .. " tiling_mode must be one of split, ajuste"
-    end
-
     local insert_mode = raw_display_config.insert_mode or "view"
     if not VALID_INSERT_MODES[insert_mode] then
         return nil, "fit-scroller: display " .. tostring(display_id) .. " insert_mode must be one of last, first, view, after_focused, before_focused"
@@ -146,7 +135,6 @@ local function normalize(raw_display_config, display_id)
         dimensions_by_key = by_key,
         toggle_cycle = cycle,
         scroll_direction = direction,
-        tiling_mode = tiling_mode,
         insert_mode = insert_mode,
     }
 end
@@ -163,7 +151,6 @@ function M.resolve_display(raw_config, display_id)
     local effective = {
         allowed_dimensions = copy_array(raw_config.default.allowed_dimensions),
         scroll_direction = raw_config.default.scroll_direction,
-        tiling_mode = raw_config.default.tiling_mode,
         insert_mode = raw_config.default.insert_mode,
     }
 
@@ -175,9 +162,6 @@ function M.resolve_display(raw_config, display_id)
         end
         if override.scroll_direction ~= nil then
             effective.scroll_direction = override.scroll_direction
-        end
-        if override.tiling_mode ~= nil then
-            effective.tiling_mode = override.tiling_mode
         end
         if override.insert_mode ~= nil then
             effective.insert_mode = override.insert_mode

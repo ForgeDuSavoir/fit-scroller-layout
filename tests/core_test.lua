@@ -22,14 +22,12 @@ local function test_config_defaults_and_validation()
             scroll_direction = "right",
         },
     }))
-    assert_eq(cfg.tiling_mode, "split", "tiling default")
     assert_eq(cfg.insert_mode, "view", "insert default")
 
     local invalid, err = config.get_for_display("default", {
         default = {
             allowed_dimensions = { { 1, 1 } },
             scroll_direction = "right",
-            tiling_mode = "split",
             insert_mode = "focus",
         },
     })
