@@ -321,6 +321,16 @@ local FORCED_EXAMPLES = {
             { id = "G", expected = "0.33x0.33" },
         },
     },
+    {
+        name = "forced fullscreen anchor minimizes global overflow",
+        dimensions = CONFIG_1,
+        windows = {
+            { id = "A", expected = "0.5x0.5" },
+            { id = "B", expected = "0.5x0.5" },
+            { id = "C", forced = "1.0x1.0", expected = "1.0x1.0" },
+            { id = "D", expected = "0.5x1.0" },
+        },
+    },
 }
 
 local function normalized_config(dimensions)

@@ -168,12 +168,14 @@ end
 
 local function fullscreen_forced_group_metrics(candidate, input)
     local has_fullscreen_anchor = false
+    local group_count = 0
     local group_extent = 0
     local group_overflow = 0
     local group_fill_gap = 0
 
     local function flush_group()
         if group_extent > 0 then
+            group_count = group_count + 1
             group_overflow = group_overflow + math.max(0, group_extent - 1)
             if group_extent <= 1 + 0.0000001 then
                 group_fill_gap = group_fill_gap + (1 - fill_value(math.min(group_extent, 1)))
@@ -193,10 +195,14 @@ local function fullscreen_forced_group_metrics(candidate, input)
     flush_group()
 
     if not has_fullscreen_anchor then
-        return 0, 0
+        return 0, 0, 0
     end
 
-    return group_overflow, group_fill_gap
+    if group_count > 1 then
+        group_fill_gap = 0
+    end
+
+    return group_overflow, group_fill_gap, group_count
 end
 
 local function rank_candidate(candidate, input)
@@ -401,6 +407,89 @@ local function append_best_patterns(target, source, limit)
     for i = 1, math.min(limit, #source) do
         table.insert(target, source[i])
     end
+end
+
+local function compare_partial_states(a, b)
+    local overflow_a = math.max(0, a.extent - 1)
+    local overflow_b = math.max(0, b.extent - 1)
+    local result = compare_number(overflow_a, overflow_b)
+    if result ~= nil then
+        return result
+    end
+
+    local fill_a = fill_value(math.min(a.extent, 1))
+    local fill_b = fill_value(math.min(b.extent, 1))
+    result = compare_number(1 - fill_a, 1 - fill_b)
+    if result ~= nil then
+        return result
+    end
+
+    local average_cross_a = a.column_count > 0 and a.total_cross_fill / a.column_count or 0
+    local average_cross_b = b.column_count > 0 and b.total_cross_fill / b.column_count or 0
+    result = compare_number(1 - average_cross_a, 1 - average_cross_b)
+    if result ~= nil then
+        return result
+    end
+
+    result = compare_number(a.balance_range, b.balance_range)
+    if result ~= nil then
+        return result
+    end
+
+    local full_gap_a = a.column_count - a.full_columns
+    local full_gap_b = b.column_count - b.full_columns
+    result = compare_number(full_gap_a, full_gap_b)
+    if result ~= nil then
+        return result
+    end
+
+    result = compare_number(a.extent, b.extent)
+    if result ~= nil then
+        return result
+    end
+
+    return a.key < b.key
+end
+
+local function prune_partial_states(states, limit)
+    if #states <= limit then
+        return
+    end
+
+    table.sort(states, compare_partial_states)
+    for index = #states, limit + 1, -1 do
+        states[index] = nil
+    end
+end
+
+local function extend_partial_state(state, column)
+    local count = column.end_index - column.start_index + 1
+    local columns = {}
+    for index, existing in ipairs(state.columns) do
+        columns[index] = existing
+    end
+    columns[#columns + 1] = column
+
+    local cross_fill = fill_value(column.pattern.cross_fill)
+    local full_columns = state.full_columns
+    if math.abs(cross_fill - 1) <= 0.0000001 then
+        full_columns = full_columns + 1
+    end
+
+    local min_count = state.min_column_count and math.min(state.min_column_count, count) or count
+    local max_count = state.max_column_count and math.max(state.max_column_count, count) or count
+
+    return {
+        columns = columns,
+        extent = state.extent + column.pattern.scroll_size,
+        column_count = state.column_count + 1,
+        total_cross_fill = state.total_cross_fill + math.min(cross_fill, 1),
+        full_columns = full_columns,
+        min_column_count = min_count,
+        max_column_count = max_count,
+        balance_range = max_count - min_count,
+        key = state.key .. "/" .. tostring(column.end_index) .. ":" .. pattern_key(column.pattern),
+    }
 end
 
 local function forced_item_for_target(input, target, items_by_key)
@@ -615,52 +704,84 @@ function M.generate_candidates(input)
         items_by_key[item.key] = item
     end
 
-    local columns = {}
-    local max_candidates = 20000
+    local max_states_per_index = 32
     local max_extent = math.max(3, #input.targets * smallest_scroll_size(items))
+    local pattern_cache = {}
 
-    local function generate_from(start_index, current_extent)
-        if #candidates >= max_candidates then
-            return true
+    local function patterns_for(start_index, end_index)
+        local key = tostring(start_index) .. ":" .. tostring(end_index)
+        local cached = pattern_cache[key]
+        if cached then
+            return cached.patterns, cached.err
         end
 
-        if start_index > #input.targets then
-            local candidate = build_candidate_from_columns(input, columns)
-            rank_candidate(candidate, input)
-            table.insert(candidates, candidate)
-            return true
-        end
+        local patterns, patterns_err = generate_column_patterns(input, start_index, end_index, items, items_by_key)
+        pattern_cache[key] = {
+            patterns = patterns,
+            err = patterns_err,
+        }
+        return patterns, patterns_err
+    end
 
-        for end_index = #input.targets, start_index, -1 do
-            local patterns, patterns_err = generate_column_patterns(input, start_index, end_index, items, items_by_key)
-            if not patterns then
-                return nil, patterns_err
-            end
+    local states_by_index = {
+        [1] = {
+            {
+                columns = {},
+                extent = 0,
+                column_count = 0,
+                total_cross_fill = 0,
+                full_columns = 0,
+                min_column_count = nil,
+                max_column_count = nil,
+                balance_range = 0,
+                key = "",
+            },
+        },
+    }
 
-            for _, pattern in ipairs(patterns) do
-                local next_extent = current_extent + pattern.scroll_size
-                if next_extent <= max_extent + 0.0000001 or #candidates == 0 then
-                    table.insert(columns, {
-                        start_index = start_index,
-                        end_index = end_index,
-                        pattern = pattern,
-                    })
+    for start_index = 1, #input.targets do
+        local states = states_by_index[start_index] or {}
+        prune_partial_states(states, max_states_per_index)
 
-                    local ok, generation_err = generate_from(end_index + 1, next_extent)
-                    table.remove(columns)
-                    if not ok then
-                        return nil, generation_err
+        for _, state in ipairs(states) do
+            for end_index = #input.targets, start_index, -1 do
+                local patterns, patterns_err = patterns_for(start_index, end_index)
+                if not patterns then
+                    return nil, patterns_err
+                end
+
+                for _, pattern in ipairs(patterns) do
+                    local next_extent = state.extent + pattern.scroll_size
+                    if next_extent <= max_extent + 0.0000001 then
+                        local next_index = end_index + 1
+                        local next_states = states_by_index[next_index]
+                        if not next_states then
+                            next_states = {}
+                            states_by_index[next_index] = next_states
+                        end
+
+                        table.insert(next_states, extend_partial_state(state, {
+                            start_index = start_index,
+                            end_index = end_index,
+                            pattern = pattern,
+                        }))
+
+                        if #next_states > max_states_per_index * 2 then
+                            prune_partial_states(next_states, max_states_per_index)
+                        end
                     end
                 end
             end
         end
-
-        return true
     end
 
-    local ok, generation_err = generate_from(1, 0)
-    if not ok then
-        return nil, generation_err
+    local complete_states = states_by_index[#input.targets + 1] or {}
+    prune_partial_states(complete_states, max_states_per_index)
+
+    for _, state in ipairs(complete_states) do
+        local candidate = build_candidate_from_columns(input, state.columns)
+        rank_candidate(candidate, input)
+        table.insert(candidates, candidate)
     end
 
     if #candidates == 0 then
