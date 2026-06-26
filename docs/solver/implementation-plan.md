@@ -234,11 +234,13 @@ Keep tests that still validate stable public behavior:
 
 ### Step 8: Final Verification
 
+Status: completed.
+
 Run:
 
 ```bash
 lua tests/run.lua
-rg 'tiling_mode|split mode|ajuste|solve_split|generate_split_slots' layout tests docs README.md
+rg 'tiling_mode|split mode|ajuste|solve_split|generate_split_slots' layout tests docs README.md -g '!docs/solver/implementation-plan.md'
 ```
 
 Expected:
@@ -246,8 +248,8 @@ Expected:
 - all tests pass;
 - no `tiling_mode` dependency remains in official code or docs;
 - no old split or ajuste solver branch remains;
-- legacy notes outside official docs may still mention old behavior if kept as
-  historical context.
+- the implementation plan itself may still mention old names as completed
+  historical tasks.
 
 ## Acceptance Criteria
 
