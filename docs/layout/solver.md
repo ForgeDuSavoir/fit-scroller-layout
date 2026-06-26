@@ -7,6 +7,14 @@ state and display configuration.
 
 It is the main implementation of the product rules in `SPECIFICATION.md`.
 
+The detailed official solver behavior is documented in
+[../solver/detailed-logic.md](../solver/detailed-logic.md).
+
+Validated implementation examples are documented in:
+
+- [../solver/base-examples.md](../solver/base-examples.md);
+- [../solver/forced-examples.md](../solver/forced-examples.md).
+
 ## Responsibilities
 
 `solver.lua` must:
@@ -19,7 +27,7 @@ It is the main implementation of the product rules in `SPECIFICATION.md`.
 - honor forced dimensions;
 - reject candidates that overlap on the cross axis;
 - allow overflow only on the scroll axis;
-- implement `tiling_mode = "split"` and `tiling_mode = "ajuste"`;
+- rank candidates according to the official solver logic;
 - return placements as host-independent rectangles.
 
 It must not:
@@ -118,70 +126,27 @@ the other directions by `traversal.lua`.
 Spatial placement, where windows are positioned by directional adjacency, is a
 future version concern and must not be mixed into the V1 solver.
 
-## `split` Tiling Mode
+## Official Solver Logic
 
-`split` is the default incremental strategy.
+The solver uses one candidate-based strategy for both auto and forced
+dimensions.
 
-Recommended V1 strategy:
+The solver must:
 
-1. Normalize the configured direction to canonical `right`.
-2. Build ordered slots.
-3. Start with one `1.0 x 1.0` slot when one target exists.
-4. When another target is needed, find the largest existing auto slot.
-5. Check whether that slot can be split into two allowed dimensions that
-   exactly cover the original slot.
-6. If it can, replace the slot with the two split slots in traversal order.
-7. If it cannot, switch to `ajuste` for the current target count.
-8. If all visible slots are already at minimum practical scroll-axis size and
-   more targets are needed, append a slot in the scroll direction. The appended
-   slot uses the smallest allowed scroll-axis dimension that minimizes
-   additional scroll and the largest allowed cross-axis dimension that fills
-   visible space.
-9. Assign windows to slots in logical order.
-10. Transform the canonical layout back to the configured direction.
+1. normalize the configured direction to a canonical `right` layout problem;
+2. resolve each target's dimension mode;
+3. generate valid ordered column candidates;
+4. reject candidates that violate forced dimensions;
+5. rank candidates by scroll, fill, balance, practical size and stable
+   tie-breakers;
+6. transform the selected canonical layout back to the configured direction.
 
-For the common configuration:
+There is no separate semantic solver mode for `split` or `ajuste` in the
+current official solver behavior.
 
-```lua
-allowed_dimensions = {
-    { 1.0, 1.0 },
-    { 0.5, 1.0 },
-    { 0.5, 0.5 },
-}
-scroll_direction = "right"
-tiling_mode = "split"
-```
-
-the canonical sequence is:
-
-```text
-1: A
-2: A | B
-3: A/B | C
-4: A/B | C/D
-5: A/B | C/D | E
-6: A/B | C/D | E/F
-```
-
-where `A/B` means `A` above `B` in the same column.
-
-## `ajuste` Tiling Mode
-
-`ajuste` directly searches for an order-preserving layout for the current
-target count.
-
-Candidate ranking for `ajuste`:
-
-1. all windows use the same dimension, if possible;
-2. otherwise, smallest difference between window areas;
-3. then smallest workspace extent along the scroll axis;
-4. then stable canonical position order.
-
-All candidates must still preserve logical order and use only configured
-allowed dimensions.
-
-`split` may fall back to this same strategy when no valid largest-slot split
-exists.
+The complete candidate model, forced-dimension rules, ranking rules and
+examples are documented in
+[../solver/detailed-logic.md](../solver/detailed-logic.md).
 
 ## Forced Dimensions
 
@@ -197,8 +162,8 @@ error. The caller must preserve the previous valid state and layout.
 
 Workspace extent is measured only on the scroll axis.
 
-Smaller extent wins only after the tiling-mode-specific requirements are
-satisfied.
+Smaller extent wins according to the ranking documented in
+[../solver/detailed-logic.md](../solver/detailed-logic.md).
 
 ### Stable Position Order
 
@@ -213,7 +178,7 @@ Recommended functions:
 solver.solve(input)
 solver.generate_layouts(input)
 solver.validate_candidate(candidate, input)
-solver.compare_ajuste_candidates(a, b, input)
+solver.rank_candidate(candidate, input)
 ```
 
 ### `solve(input)`
@@ -245,11 +210,10 @@ The current solver intentionally does not implement:
 - Auto windows receive only configured allowed dimensions.
 - Forced windows keep their forced dimensions when valid.
 - Invalid forced dimensions return errors.
-- `split` follows largest-slot splitting before falling back to `ajuste`.
-- `ajuste` prefers equal dimensions, then smallest size differences, then
-  smallest scroll extent.
 - Returned placements preserve logical order.
 - Overflow occurs only on the configured scroll axis.
+- Candidate ranking follows
+  [../solver/detailed-logic.md](../solver/detailed-logic.md).
 
 ## Hardening
 
@@ -265,7 +229,6 @@ valid layout for every target, or an error that the adapter can recover from.
 - `config` is present and already normalized;
 - `config.allowed_dimensions` is non-empty;
 - `config.scroll_direction` is supported;
-- `config.tiling_mode` is `split` or `ajuste`;
 - `targets` is a list;
 - every target has a stable id;
 - target ids are unique;
@@ -358,37 +321,20 @@ Changing any of the following must not change solver output:
 The adapter should enforce this by not passing focus or viewport state to
 `solver.solve(input)`.
 
-## Tiling Mode Tests
+## Solver Logic Tests
 
-`split` tests must cover the documented order-mode sequence for at least A
-through H with:
+Solver logic tests must cover the official validation corpora:
 
-```lua
-allowed_dimensions = {
-    { 1.0, 1.0 },
-    { 0.5, 1.0 },
-    { 0.5, 0.5 },
-}
-scroll_direction = "right"
-tiling_mode = "split"
-```
+- [../solver/base-examples.md](../solver/base-examples.md);
+- [../solver/forced-examples.md](../solver/forced-examples.md).
 
-Expected canonical order:
+Tests should also prove:
 
-```text
-A/B | C/D | E/F | G/H
-```
-
-Odd counts must use the smallest allowed scroll-axis size and the largest
-allowed cross-axis size for the appended slot when no further split is
-possible.
-
-`ajuste` tests must prove:
-
-- equal dimensions are preferred when valid;
-- when equality is impossible, the smallest difference between window areas is
-  preferred;
-- after mode-specific priorities, smaller scroll extent wins;
+- no successful candidate violates a forced dimension;
+- no successful candidate invents a dimension outside `allowed_dimensions`;
+- no successful candidate overlaps on the cross axis;
+- `0.99` fills from configured third-based dimensions are treated as complete
+  fills;
 - output remains deterministic when candidates tie.
 
 ## Diagnostics
@@ -418,14 +364,9 @@ Solver tests should cover:
 - missing forced dimension key rejected;
 - forced dimension too large for cross axis rejected;
 - many equivalent candidates produce stable output;
-- `split` opens A, B, C, D, E, F, G, H according to the documented split
-  sequence;
-- `split` odd counts append the smallest scroll-axis slot that fills the
-  cross axis as much as allowed;
-- `split` falls back to `ajuste` when the largest slot cannot be split;
-- `ajuste` prioritizes equal dimensions;
-- `ajuste` prioritizes smallest size differences after equality fails;
-- both modes prioritize smaller scroll extent after their mode-specific rules;
+- all examples in [../solver/base-examples.md](../solver/base-examples.md);
+- all examples in
+  [../solver/forced-examples.md](../solver/forced-examples.md);
 - all four directions preserve logical order;
 - focus changes do not change solver output;
 - viewport offset changes do not change solver output;
@@ -438,6 +379,5 @@ Solver tests should cover:
 - Candidate ordering is deterministic and independent from table iteration.
 - Forced-dimension failures are readable and recoverable by the adapter.
 - Solver output is independent from focus and viewport state.
-- `split` and `ajuste` behavior match the updated specification.
 - Edge-case tests cover empty, single-window, forced, mixed and directional
   layouts.

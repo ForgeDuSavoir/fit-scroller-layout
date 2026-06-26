@@ -12,6 +12,9 @@ This concept is currently implemented as a custom layout for Hyprland, but the u
 The detailed behavioral contract is documented in
 [docs/SPECIFICATION.md](docs/SPECIFICATION.md).
 
+The detailed solver behavior and validation examples are documented in
+[docs/solver/README.md](docs/solver/README.md).
+
 The first implementation architecture is documented in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

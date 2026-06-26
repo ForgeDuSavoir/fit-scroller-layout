@@ -1,5 +1,5 @@
 - [x] Forced dimensions -> Switching desktop looses forced dimension state
-- [ ] [[Ajuste algorithm not working]] correctly : 
+- [ ] [[Ajuste algorithm not working]] correctly : -> Solution by implementing [[2 Projects/fit-scroller-layout/docs/solver/README|docs/solver/]]
 	- [ ] Scroll is not as little as possible -> 0.33 size not picked while it should
 	- [ ] Windows before window with forced dimension do not have correct dimensions
 - [ ] Per-display config not working

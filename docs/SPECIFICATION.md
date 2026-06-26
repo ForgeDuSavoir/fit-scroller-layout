@@ -7,6 +7,9 @@ This document is a working product specification.
 It defines the expected behavior of Fit Scroller independently from any
 particular window manager.
 
+The detailed solver algorithm and validation examples are documented in
+[solver/README.md](solver/README.md).
+
 ## Version Scope
 
 This document specifies the target behavior for version 1 unless a section is

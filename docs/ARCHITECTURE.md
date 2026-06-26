@@ -338,6 +338,9 @@ V1 traversal rules:
 
 Computes the best layout candidate.
 
+The official detailed solver behavior and validation examples are documented in
+[`docs/solver/`](solver/README.md).
+
 Inputs:
 
 - validated configuration;
@@ -378,9 +381,10 @@ version.
 Recommended V1 strategy:
 
 - normalize all directions to a canonical `right` layout problem;
-- use `tiling_mode = "split"` or `tiling_mode = "ajuste"`;
-- preserve order by assigning windows to ordered slots;
-- minimize scroll only after filling visible space and preserving order;
+- generate ordered column candidates using the official solver logic;
+- preserve forced dimensions as hard constraints;
+- rank candidates by scroll, fill, balance, practical size and stable
+  tie-breakers;
 - transform the selected canonical layout back to the configured direction.
 
 This keeps direction handling separate from packing complexity.
@@ -480,8 +484,9 @@ Recommended test layers:
 - `commands` tests for move and toggle behavior;
 - `traversal` tests for each direction;
 - `viewport` tests for reveal and clamping;
-- `solver` tests for `split`, `ajuste`, order preservation, forced dimensions
-  and independence from focus/viewport state;
+- `solver` tests for the official examples in
+  [`docs/solver/`](solver/README.md), order preservation, forced dimensions and
+  independence from focus/viewport state;
 - adapter smoke tests using mocked `ctx` and `target:place`.
 
 The Hyprland adapter should be kept thin enough that most behavior can be
