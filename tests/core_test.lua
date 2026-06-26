@@ -77,7 +77,7 @@ local function test_insert_modes()
     end
 end
 
-local function test_solver_split_and_independence()
+local function test_solver_output_is_focus_and_viewport_independent()
     local cfg = assert(config.get_for_display("default"))
     local targets = {}
     for _, id in ipairs({ "A", "B", "C", "D", "E", "F", "G", "H" }) do
@@ -165,7 +165,7 @@ return {
         test_config_defaults_and_validation,
         test_target_sync_validation_is_transactional,
         test_insert_modes,
-        test_solver_split_and_independence,
+        test_solver_output_is_focus_and_viewport_independent,
         test_viewport_validation,
         test_command_intents_and_failed_validation,
     },

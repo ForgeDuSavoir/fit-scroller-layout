@@ -209,6 +209,8 @@ Validation:
 
 ### Step 7: Clean Up Obsolete Tests
 
+Status: completed.
+
 Update or remove tests that encode old implementation behavior.
 
 In `tests/core_test.lua`:

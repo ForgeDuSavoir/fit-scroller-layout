@@ -110,7 +110,7 @@ local function test_adapter_workspace_switch_keeps_forced_dimensions()
     }
 
     assert_eq(adapter.recalculate(ctx_one), nil, "initial workspace one recalc")
-    assert_eq(workspace_one_targets[1].last_rect.w, 500, "auto split before toggle")
+    assert_eq(workspace_one_targets[1].last_rect.w, 500, "auto width before toggle")
     assert_eq(adapter.layout_msg(ctx_one, "toggle dimension"), true, "toggle dimension")
     assert_eq(adapter.recalculate(ctx_one), nil, "forced workspace one recalc")
     assert_eq(workspace_one_targets[1].last_rect.w, 1000, "forced width before switch")
