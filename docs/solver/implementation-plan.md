@@ -190,6 +190,8 @@ Validation:
 
 ### Step 6: Complete Forced-Dimension Behavior
 
+Status: completed.
+
 Verify and fix forced-dimension cases:
 
 - forced full-cross windows act as hard singleton anchors;

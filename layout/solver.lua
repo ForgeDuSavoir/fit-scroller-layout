@@ -119,6 +119,86 @@ local function is_uniform_full_cross(candidate, input)
     return key ~= nil
 end
 
+local function column_index_by_target_index(candidate)
+    local by_index = {}
+    for column_index, column in ipairs(candidate.columns or {}) do
+        for index = column.start_index, column.end_index do
+            by_index[index] = column_index
+        end
+    end
+    return by_index
+end
+
+local function adjacent_forced_split_count(candidate, input)
+    local by_index = column_index_by_target_index(candidate)
+    local count = 0
+
+    for index = 1, #input.targets - 1 do
+        local current = forced_dimension_for_target(input, input.targets[index])
+        local next_forced = forced_dimension_for_target(input, input.targets[index + 1])
+
+        if current and next_forced then
+            local current_canonical = canonical_dimension(current, input.config.scroll_direction)
+            local next_canonical = canonical_dimension(next_forced, input.config.scroll_direction)
+            local same_scroll = nearly_equal(current_canonical.w, next_canonical.w)
+            local can_share_cross = current_canonical.h + next_canonical.h <= 1 + 0.0000001
+            if same_scroll and can_share_cross and by_index[index] ~= by_index[index + 1] then
+                count = count + 1
+            end
+        end
+    end
+
+    return count
+end
+
+local function is_fullscreen_forced_column(candidate, input, column)
+    if column.start_index ~= column.end_index then
+        return false
+    end
+
+    local target = input.targets[column.start_index]
+    local forced = forced_dimension_for_target(input, target)
+    if not forced then
+        return false
+    end
+
+    local canonical = canonical_dimension(forced, input.config.scroll_direction)
+    return canonical.w >= 1 - 0.0000001 and canonical.h >= 1 - 0.0000001
+end
+
+local function fullscreen_forced_group_metrics(candidate, input)
+    local has_fullscreen_anchor = false
+    local group_extent = 0
+    local group_overflow = 0
+    local group_fill_gap = 0
+
+    local function flush_group()
+        if group_extent > 0 then
+            group_overflow = group_overflow + math.max(0, group_extent - 1)
+            if group_extent <= 1 + 0.0000001 then
+                group_fill_gap = group_fill_gap + (1 - fill_value(math.min(group_extent, 1)))
+            end
+            group_extent = 0
+        end
+    end
+
+    for _, column in ipairs(candidate.columns or {}) do
+        if is_fullscreen_forced_column(candidate, input, column) then
+            has_fullscreen_anchor = true
+            flush_group()
+        else
+            group_extent = group_extent + column.pattern.scroll_size
+        end
+    end
+    flush_group()
+
+    if not has_fullscreen_anchor then
+        return 0, 0
+    end
+
+    return group_overflow, group_fill_gap
+end
+
 local function rank_candidate(candidate, input)
     local min_area = nil
     local max_area = nil
@@ -153,12 +233,16 @@ local function rank_candidate(candidate, input)
     local scroll_fill = fill_value(math.min(candidate.workspace_extent, 1))
     local average_cross_fill = column_count > 0 and total_cross_fill / column_count or 0
     local average_scroll_size = column_count > 0 and scroll_fill / column_count or 0
+    local group_overflow, group_fill_gap = fullscreen_forced_group_metrics(candidate, input)
 
     candidate.ranking = {
+        fullscreen_group_overflow = group_overflow,
+        fullscreen_group_fill_gap = group_fill_gap,
         overflow = overflow,
         scroll_fill_gap = 1 - scroll_fill,
         uniform_full_cross = is_uniform_full_cross(candidate, input) and 0 or 1,
         large_cross_fill_gap = (1 - average_cross_fill) > 0.25 and (1 - average_cross_fill) or 0,
+        adjacent_forced_split_count = adjacent_forced_split_count(candidate, input),
         no_scroll_average_scroll_size = overflow <= 0.0000001 and average_scroll_size or 0,
         full_column_gap = column_count - full_columns,
         average_cross_fill_gap = 1 - average_cross_fill,
@@ -179,10 +263,13 @@ end
 
 local function compare_candidates(a, b)
     local fields = {
+        "fullscreen_group_overflow",
+        "fullscreen_group_fill_gap",
         "overflow",
         "scroll_fill_gap",
         "uniform_full_cross",
         "large_cross_fill_gap",
+        "adjacent_forced_split_count",
         "balance_range",
         "no_scroll_average_scroll_size",
         "full_column_gap",
