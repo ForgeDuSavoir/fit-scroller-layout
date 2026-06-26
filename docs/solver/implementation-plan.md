@@ -159,6 +159,8 @@ Validation:
 
 ### Step 5: Implement Official Candidate Ranking
 
+Status: completed.
+
 Rank valid candidates by the documented criteria:
 
 1. validity;

@@ -77,35 +77,129 @@ local function layout_extent(placements)
     return extent
 end
 
+local function nearly_equal(a, b)
+    return math.abs(a - b) <= 0.0000001
+end
+
+local function fill_value(value)
+    if math.abs(value - 1) <= 0.011 then
+        return 1
+    end
+    return value
+end
+
+local function candidate_stable_key(candidate, input)
+    local parts = {}
+    for i, target in ipairs(input.targets) do
+        local rect = candidate.placements_by_id[target.id]
+        local dimension = candidate.dimensions_by_id[target.id]
+        parts[i] = string.format(
+            "%.6f,%.6f,%s",
+            rect and rect.x or 0,
+            rect and rect.y or 0,
+            dimension and dimension.key or ""
+        )
+    end
+    return table.concat(parts, "|")
+end
+
+local function is_uniform_full_cross(candidate, input)
+    local key = nil
+    for _, target in ipairs(input.targets) do
+        local dimension = candidate.dimensions_by_id[target.id]
+        local rect = candidate.placements_by_id[target.id]
+        if not dimension or not rect or math.abs(rect.h - 1) > 0.011 then
+            return false
+        end
+        if key and key ~= dimension.key then
+            return false
+        end
+        key = dimension.key
+    end
+    return key ~= nil
+end
+
 local function rank_candidate(candidate, input)
     local min_area = nil
     local max_area = nil
+    local total_area = 0
 
     for _, target in ipairs(input.targets) do
         local dimension = candidate.dimensions_by_id[target.id]
         local area = geometry.dimension_area(dimension)
+        total_area = total_area + area
         min_area = min_area and math.min(min_area, area) or area
         max_area = max_area and math.max(max_area, area) or area
     end
 
+    local min_column_count = nil
+    local max_column_count = nil
+    local full_columns = 0
+    local total_cross_fill = 0
+    for _, column in ipairs(candidate.columns or {}) do
+        local count = column.end_index - column.start_index + 1
+        min_column_count = min_column_count and math.min(min_column_count, count) or count
+        max_column_count = max_column_count and math.max(max_column_count, count) or count
+
+        local cross_fill = fill_value(column.pattern.cross_fill)
+        total_cross_fill = total_cross_fill + math.min(cross_fill, 1)
+        if math.abs(cross_fill - 1) <= 0.0000001 then
+            full_columns = full_columns + 1
+        end
+    end
+
+    local column_count = #(candidate.columns or {})
+    local overflow = math.max(0, candidate.workspace_extent - 1)
+    local scroll_fill = fill_value(math.min(candidate.workspace_extent, 1))
+    local average_cross_fill = column_count > 0 and total_cross_fill / column_count or 0
+    local average_scroll_size = column_count > 0 and scroll_fill / column_count or 0
+
     candidate.ranking = {
+        overflow = overflow,
+        scroll_fill_gap = 1 - scroll_fill,
+        uniform_full_cross = is_uniform_full_cross(candidate, input) and 0 or 1,
+        large_cross_fill_gap = (1 - average_cross_fill) > 0.25 and (1 - average_cross_fill) or 0,
+        no_scroll_average_scroll_size = overflow <= 0.0000001 and average_scroll_size or 0,
+        full_column_gap = column_count - full_columns,
+        average_cross_fill_gap = 1 - average_cross_fill,
+        balance_range = (max_column_count or 0) - (min_column_count or 0),
+        average_area_gap = 1 - (total_area / math.max(#input.targets, 1)),
         area_range = (max_area or 0) - (min_area or 0),
         workspace_extent = candidate.workspace_extent,
+        stable_key = candidate_stable_key(candidate, input),
     }
 end
 
-local function compare_candidates(a, b)
-    if a.ranking.area_range ~= b.ranking.area_range then
-        return a.ranking.area_range < b.ranking.area_range
+local function compare_number(a, b)
+    if nearly_equal(a, b) then
+        return nil
     end
-    if a.ranking.workspace_extent ~= b.ranking.workspace_extent then
-        return a.ranking.workspace_extent < b.ranking.workspace_extent
-    end
-    return false
+    return a < b
 end
 
-local function nearly_equal(a, b)
-    return math.abs(a - b) <= 0.0000001
+local function compare_candidates(a, b)
+    local fields = {
+        "overflow",
+        "scroll_fill_gap",
+        "uniform_full_cross",
+        "large_cross_fill_gap",
+        "balance_range",
+        "no_scroll_average_scroll_size",
+        "full_column_gap",
+        "average_cross_fill_gap",
+        "average_area_gap",
+        "area_range",
+        "workspace_extent",
+    }
+
+    for _, field in ipairs(fields) do
+        local result = compare_number(a.ranking[field], b.ranking[field])
+        if result ~= nil then
+            return result
+        end
+    end
+
+    return a.ranking.stable_key < b.ranking.stable_key
 end
 
 local function canonical_dimension_items(config)
