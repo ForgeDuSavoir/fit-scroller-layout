@@ -32,6 +32,45 @@ The folder can also be renamed to your liking.
 
 ## Installation
 
+### From An Official Release
+
+Download the latest `fit-scroller-layout-vX.Y.Z.tar.gz` archive from the
+GitHub release page:
+
+```text
+https://github.com/ForgeDuSavoir/fit-scroller-layout/releases
+```
+
+Then extract it into a stable Hyprland layouts directory:
+
+```sh
+mkdir -p ~/.config/hypr/layouts
+tar -C ~/.config/hypr/layouts -xzf fit-scroller-layout-vX.Y.Z.tar.gz
+```
+
+This creates:
+
+```text
+~/.config/hypr/layouts/fit-scroller/
+```
+
+Load the layout entry point from your Hyprland Lua configuration:
+
+```lua
+dofile(os.getenv("HOME") .. "/.config/hypr/layouts/fit-scroller/init.lua")
+```
+
+Then select the registered layout name:
+
+```text
+lua:fit-scroller
+```
+
+### From A Git Checkout
+
+Use this method only if you want to develop Fit Scroller or inspect the full
+repository.
+
 1. Put the project somewhere stable, for example:
 ```text
 ~/src/fit-scroller-layout
@@ -40,7 +79,7 @@ The folder can also be renamed to your liking.
 2. Load the layout entry point from your Hyprland Lua configuration:
 
 ```lua
-dofile("/home/USER/src/fit-scroller-layout/init.lua")
+dofile("/home/USER/src/fit-scroller-layout/layout/init.lua")
 ```
 
 Use the absolute path that matches your installation.
@@ -49,7 +88,7 @@ If your Hyprland setup uses another import mechanism, the important part is
 that Hyprland loads this file:
 
 ```text
-<fit-scroller>/init.lua
+<fit-scroller>/layout/init.lua
 ```
 
 3. Select the layout in Hyprland using the registered layout name:

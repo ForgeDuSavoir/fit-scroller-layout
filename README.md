@@ -28,6 +28,9 @@ The first implementation architecture is documented in
 The Hyprland installation and configuration guide is documented in
 [docs/USER_GUIDE_FOR_HYPRLAND_CUSTOM_LAYOUT.md](docs/USER_GUIDE_FOR_HYPRLAND_CUSTOM_LAYOUT.md).
 
+The official release process is documented in
+[docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
+
 ---
 
 ## Design Principles
