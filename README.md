@@ -15,6 +15,13 @@ The detailed behavioral contract is documented in
 The detailed solver behavior and validation examples are documented in
 [docs/solver/README.md](docs/solver/README.md).
 
+The future spatial placement mode is specified in
+[docs/SPATIAL_MODE_SPECIFICATION.md](SPATIAL_MODE_SPECIFICATION.md).
+Its technical design is documented in
+[docs/SPATIAL_MODE_TECHNICAL_SPECIFICATION.md](SPATIAL_MODE_TECHNICAL_SPECIFICATION.md).
+The implementation plan is tracked in
+[docs/SPATIAL_MODE_IMPLEMENTATION_PLAN.md](SPATIAL_MODE_IMPLEMENTATION_PLAN.md).
+
 The first implementation architecture is documented in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

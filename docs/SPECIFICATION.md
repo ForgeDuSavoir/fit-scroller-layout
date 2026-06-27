@@ -112,6 +112,9 @@ Version 1 supports an order-based tiling model. Spatial tiling, where
 placement is chosen from directional adjacency such as left, right, up and
 down, is reserved for a future version.
 
+The future spatial placement behavior is specified separately in
+[SPATIAL_MODE_SPECIFICATION.md](SPATIAL_MODE_SPECIFICATION.md).
+
 ## Configuration
 
 Configuration is defined per display.
