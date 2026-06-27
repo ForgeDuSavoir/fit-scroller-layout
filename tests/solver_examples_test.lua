@@ -331,6 +331,15 @@ local FORCED_EXAMPLES = {
             { id = "D", expected = "0.5x1.0" },
         },
     },
+    {
+        name = "forced trailing fullscreen anchor keeps preceding pair compact",
+        dimensions = CONFIG_1,
+        windows = {
+            { id = "A", expected = "0.5x0.5" },
+            { id = "B", expected = "0.5x0.5" },
+            { id = "C", forced = "1.0x1.0", expected = "1.0x1.0" },
+        },
+    },
 }
 
 local function normalized_config(dimensions)

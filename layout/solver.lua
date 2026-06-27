@@ -172,15 +172,19 @@ local function fullscreen_forced_group_metrics(candidate, input)
     local group_extent = 0
     local group_overflow = 0
     local group_fill_gap = 0
+    local group_target_count = 0
+    local has_two_target_group = false
 
     local function flush_group()
         if group_extent > 0 then
             group_count = group_count + 1
+            has_two_target_group = has_two_target_group or group_target_count == 2
             group_overflow = group_overflow + math.max(0, group_extent - 1)
             if group_extent <= 1 + 0.0000001 then
                 group_fill_gap = group_fill_gap + (1 - fill_value(math.min(group_extent, 1)))
             end
             group_extent = 0
+            group_target_count = 0
         end
     end
 
@@ -190,6 +194,7 @@ local function fullscreen_forced_group_metrics(candidate, input)
             flush_group()
         else
             group_extent = group_extent + column.pattern.scroll_size
+            group_target_count = group_target_count + column.end_index - column.start_index + 1
         end
     end
     flush_group()
@@ -198,7 +203,7 @@ local function fullscreen_forced_group_metrics(candidate, input)
         return 0, 0, 0
     end
 
-    if group_count > 1 then
+    if group_count > 1 or has_two_target_group then
         group_fill_gap = 0
     end
 
