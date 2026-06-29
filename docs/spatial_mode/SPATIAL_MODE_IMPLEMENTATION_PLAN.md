@@ -59,7 +59,7 @@ mode-mismatch behavior.
 
 ### Step 1: Add `placement_priority` To Configuration
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -90,7 +90,7 @@ Validation:
 
 ### Step 2: Make Command Parsing Mode-Aware
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -138,7 +138,7 @@ Validation:
 
 ### Step 3: Add Spatial Target Synchronization Metadata
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -170,7 +170,7 @@ Validation:
 
 ### Step 4: Add Spatial Geometry Helpers
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -204,7 +204,7 @@ Validation:
 
 ### Step 5: Add Spatial Focus Resolution
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -237,7 +237,7 @@ Validation:
 
 ### Step 6: Add Spatial Solver Skeleton And Input Validation
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -272,7 +272,7 @@ Validation:
 
 ### Step 7: Wire Adapter Strategy Selection
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -300,7 +300,7 @@ Validation:
 
 ### Step 8: Implement Spatial Window Addition
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -330,7 +330,7 @@ Validation:
 
 ### Step 9: Implement Spatial Window Removal
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -360,7 +360,7 @@ Validation:
 
 ### Step 10: Implement Spatial Forced Dimension Changes
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -391,7 +391,7 @@ Validation:
 
 ### Step 11: Implement Return To Auto Compaction
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -420,7 +420,7 @@ Validation:
 
 ### Step 12: Implement Spatial Move
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -452,7 +452,7 @@ Validation:
 
 ### Step 13: Complete Global Spatial Rebuild
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -490,7 +490,7 @@ Validation:
 
 ### Step 14: Harden Transactions And Recovery
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -518,7 +518,7 @@ Validation:
 
 ### Step 15: Update Documentation And User Guide
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 
@@ -546,7 +546,7 @@ Validation:
 
 ### Step 16: Final Regression Pass
 
-Status: pending.
+Status: completed.
 
 Implementation tasks:
 

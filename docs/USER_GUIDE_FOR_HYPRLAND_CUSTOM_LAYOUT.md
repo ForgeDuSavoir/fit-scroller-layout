@@ -116,6 +116,7 @@ M.raw_config = {
         },
         scroll_direction = "right",
         insert_mode = "view",
+        placement_priority = "order",
     },
     displays = {},
 }
@@ -181,6 +182,30 @@ Behavior:
 
 If the required anchor is unavailable, Fit Scroller falls back to `last`.
 
+When `placement_priority = "spatial"`, `insert_mode` is still validated but is
+ignored. New windows are placed from current geometry and viewport visibility,
+not from order insertion anchors.
+
+### `placement_priority`
+
+Valid values:
+
+- `order`;
+- `spatial`.
+
+Default value:
+
+```lua
+placement_priority = "order"
+```
+
+`order` keeps the original Fit Scroller behavior: window order is the primary
+layout constraint, and `move previous` / `move next` mutate that order.
+
+`spatial` makes current geometry the primary layout constraint. Spatial mode
+uses directional commands such as `move left`, `move right`, `focus up` and
+`focus down`. In this mode, `previous` and `next` commands are rejected.
+
 ## Per-Display Configuration
 
 You can override configuration by display name:
@@ -195,6 +220,7 @@ M.raw_config = {
         },
         scroll_direction = "right",
         insert_mode = "view",
+        placement_priority = "order",
     },
     displays = {
         ["eDP-1"] = {
@@ -212,6 +238,7 @@ M.raw_config = {
             },
             scroll_direction = "right",
             insert_mode = "view",
+            placement_priority = "spatial",
         },
     },
 }
@@ -224,7 +251,7 @@ Display-specific values override `default` field by field.
 Fit Scroller exposes layout messages. In a Hyprland Lua config, bind them
 through `hl.dsp.layout(...)`.
 
-Recommended logical focus bindings:
+Recommended order-mode logical focus bindings:
 
 ```lua
 hl.bind(mainMod .. " + Z", hl.dsp.layout("focus previous"))
@@ -241,6 +268,24 @@ hl.bind(mainMod .. " + SHIFT + Z", hl.dsp.layout("move previous"))
 hl.bind(mainMod .. " + SHIFT + X", hl.dsp.layout("move next"))
 ```
 
+Recommended spatial-mode focus bindings:
+
+```lua
+hl.bind(mainMod .. " + H", hl.dsp.layout("focus left"))
+hl.bind(mainMod .. " + L", hl.dsp.layout("focus right"))
+hl.bind(mainMod .. " + K", hl.dsp.layout("focus up"))
+hl.bind(mainMod .. " + J", hl.dsp.layout("focus down"))
+```
+
+Recommended spatial-mode movement bindings:
+
+```lua
+hl.bind(mainMod .. " + SHIFT + H", hl.dsp.layout("move left"))
+hl.bind(mainMod .. " + SHIFT + L", hl.dsp.layout("move right"))
+hl.bind(mainMod .. " + SHIFT + K", hl.dsp.layout("move up"))
+hl.bind(mainMod .. " + SHIFT + J", hl.dsp.layout("move down"))
+```
+
 Recommended dimension toggle binding:
 
 ```lua
@@ -252,10 +297,23 @@ hl.bind(mainMod .. " + C", hl.dsp.layout("toggle dimension"))
 Supported layout messages:
 
 ```text
+order mode:
 focus previous
 focus next
 move previous
 move next
+
+spatial mode:
+focus left
+focus right
+focus up
+focus down
+move left
+move right
+move up
+move down
+
+both modes:
 toggle dimension
 reveal focus
 follow
@@ -268,6 +326,10 @@ Command behavior:
 - `focus next`: focus the next window in Fit Scroller order;
 - `move previous`: move the focused window one slot earlier;
 - `move next`: move the focused window one slot later;
+- `focus left/right/up/down`: focus the best spatial candidate in that
+  direction;
+- `move left/right/up/down`: move the focused window spatially in that
+  direction;
 - `toggle dimension`: cycle the focused window through allowed dimensions;
 - `reveal focus`: reveal Hyprland's current focused window;
 - `follow`: alias for `reveal focus`;
@@ -314,11 +376,20 @@ to its own path.
 
 ### Focus changes but viewport does not follow
 
-Use Fit Scroller focus commands for logical navigation:
+In order mode, use Fit Scroller focus commands for logical navigation:
 
 ```lua
 hl.dsp.layout("focus previous")
 hl.dsp.layout("focus next")
+```
+
+In spatial mode, use directional focus commands:
+
+```lua
+hl.dsp.layout("focus left")
+hl.dsp.layout("focus right")
+hl.dsp.layout("focus up")
+hl.dsp.layout("focus down")
 ```
 
 If you use Hyprland's native focus dispatchers, Fit Scroller should still
@@ -344,6 +415,10 @@ Common causes:
 - invalid `allowed_dimensions`;
 - invalid `scroll_direction`;
 - invalid `insert_mode`;
+- using an order-only command such as `move previous` while
+  `placement_priority = "spatial"`;
+- using a spatial-only command such as `move left` while
+  `placement_priority = "order"`;
 - unsupported command text;
 - missing Hyprland window address for focus commands.
 
@@ -357,6 +432,5 @@ configuration.
 ## Current Limitations
 
 - Manual scroll commands are not part of V1.
-- V1 uses order-based tiling, not spatial left/right/up/down placement logic.
 - Configuration is currently edited in `layout/config.lua`.
 - Hyprland integration is targeted at Hyprland `0.55`.

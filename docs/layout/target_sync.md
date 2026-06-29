@@ -3,10 +3,11 @@
 ## Purpose
 
 `target_sync.lua` reconciles the live targets received from Hyprland with Fit
-Scroller's logical window order.
+Scroller's persistent per-workspace target list.
 
-It is responsible for preserving existing order, removing closed windows and
-inserting new windows according to the configured `insert_mode`.
+In order mode, that list is the logical window order. In spatial mode, that
+list is only a deterministic internal iteration list and must not define
+placement semantics.
 
 ## Responsibilities
 
@@ -14,10 +15,12 @@ inserting new windows according to the configured `insert_mode`.
 
 - receive normalized target descriptors from `hyprland_adapter.lua`;
 - remove ids that are no longer present;
-- preserve the relative order of existing ids;
-- insert new ids according to `config.insert_mode`;
+- preserve existing ids;
+- insert new ids according to `config.insert_mode` in order mode;
+- append new ids for stable iteration in spatial mode;
 - clean removed window state through `state.lua`;
-- return targets in logical order.
+- return target descriptors in the internal target list order;
+- report inserted or removed ids to the adapter.
 
 It must not:
 
@@ -44,6 +47,7 @@ It may also receive host-independent insertion context from the adapter:
 
 ```lua
 InsertContext = {
+    placement_priority = "order" | "spatial",
     insert_mode = "last" | "first" | "view" | "after_focused" | "before_focused",
     focused_id = "B",
     last_visible_id = "D",
@@ -53,7 +57,7 @@ InsertContext = {
 `last_visible_id` is computed outside `target_sync.lua` from
 `state.last_layout` and `state.viewport_offset`.
 
-## Synchronization Algorithm
+## Order Synchronization Algorithm
 
 Recommended algorithm:
 
@@ -66,6 +70,31 @@ Recommended algorithm:
 7. Update `workspace_state.focused_id` from the active target, if one exists
    after insertion.
 8. Return ordered target descriptors.
+
+This algorithm applies when `placement_priority = "order"` or when no
+placement priority is provided.
+
+## Spatial Synchronization Algorithm
+
+Spatial mode does not have a user-visible logical order.
+
+Recommended algorithm:
+
+1. Build a `present_by_id` set from live targets.
+2. Store the previous `workspace_state.focused_id`.
+3. Remove missing ids from the internal list.
+4. Remove missing ids from `workspace_state.dimension_mode_by_id`.
+5. Detect newly present ids in live target order.
+6. Append each new id to the internal list for deterministic iteration.
+7. Update `workspace_state.focused_id` from the active target, if one exists.
+8. Return target descriptors in internal list order.
+
+Spatial synchronization must not:
+
+- apply `insert_mode`;
+- insert relative to the focused window;
+- insert relative to the visible window list;
+- interpret the internal list as layout order.
 
 ## New Window Insertion
 
@@ -124,6 +153,9 @@ is provided, or if that id is no longer present, fall back to `last`.
 
 This is the default V1 behavior.
 
+When `placement_priority = "spatial"`, `insert_mode` is ignored. It remains
+validated by `config.lua`, but it does not affect target synchronization.
+
 Example:
 
 ```text
@@ -167,14 +199,19 @@ pass:
 ```lua
 {
     inserted_ids = { "C" },
+    added_ids = { "C" },
+    removed_ids = {},
     structural_changed = true,
 }
 ```
 
-The adapter uses the last inserted id as a reveal target during the same
-recalculation. This matters because Hyprland may focus a newly opened window
-after the custom layout has already read `target.window.active`, so waiting for
-the active flag alone can leave the viewport on the previous focus.
+`inserted_ids` is retained for order-mode compatibility. `added_ids` is the
+mode-neutral name used by spatial mode.
+
+The adapter uses the last inserted or added id as a reveal target during the
+same recalculation. This matters because Hyprland may focus a newly opened
+window after the custom layout has already read `target.window.active`, so
+waiting for the active flag alone can leave the viewport on the previous focus.
 
 ## Invariants
 
@@ -194,8 +231,10 @@ After synchronization:
 - New windows respect `insert_mode = "before_focused"`.
 - New windows respect `insert_mode = "view"` when a visible anchor exists.
 - New windows fall back to `last` when their mode-specific anchor is missing.
+- Spatial synchronization ignores `insert_mode`.
+- Spatial synchronization appends new ids only for deterministic iteration.
 - Closed windows are removed from order and dimension state.
-- The returned target list is ordered by Fit Scroller's logical order.
+- The returned target list follows the mode's internal target list order.
 
 ## Hardening
 

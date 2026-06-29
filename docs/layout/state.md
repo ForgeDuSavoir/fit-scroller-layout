@@ -39,6 +39,10 @@ WorkspaceState = {
     focused_id = nil,
     viewport_offset = 0,
     last_layout = nil,
+    config_signature = nil,
+    pending_layout_update = nil,
+    pending_viewport_update = nil,
+    pending_spatial_event = nil,
 }
 ```
 
@@ -51,6 +55,10 @@ Core state fields:
 `last_layout` is the boundary between the solver and viewport systems: the
 solver updates it after structural changes, and viewport changes consume it
 without invoking the solver.
+
+`pending_spatial_event` stores a transient spatial command event between
+`layout_msg(ctx, msg)` and the following `recalculate(ctx)`. It is cleared
+after successful placement.
 
 ## Dimension Modes
 
@@ -303,6 +311,8 @@ Operations that should use this pattern:
 - target synchronization when descriptor validation can fail;
 - `toggle dimension`, because the next forced dimension can be solver-invalid;
 - `move previous` and `move next`, because order changes affect solver input;
+- spatial structural commands, because solver success is not enough if
+  viewport update, rectangle conversion or target placement fails;
 - recalculation paths that update `viewport_offset`;
 - updates to `last_layout`.
 
@@ -329,6 +339,9 @@ It should verify:
 - `focused_id` is either present or `nil`;
 - `viewport_offset` is a finite number greater than or equal to `0`;
 - `last_layout`, when present, has placements only for known ids.
+
+The adapter runs this check before committing recalculation and structural
+command drafts.
 
 The adapter may call this during development or tests. Runtime behavior should
 not depend on expensive validation unless needed for diagnostics.

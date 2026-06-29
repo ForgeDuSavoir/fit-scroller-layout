@@ -108,12 +108,14 @@ already been computed.
 The solver assigns dimensions and world-space positions by generating and
 ranking order-preserving layout candidates.
 
-Version 1 supports an order-based tiling model. Spatial tiling, where
-placement is chosen from directional adjacency such as left, right, up and
-down, is reserved for a future version.
+Fit Scroller supports two placement priorities:
 
-The future spatial placement behavior is specified separately in
-[SPATIAL_MODE_SPECIFICATION.md](SPATIAL_MODE_SPECIFICATION.md).
+- order-based tiling, where logical order is the primary layout constraint;
+- spatial tiling, where placement is chosen from current geometry and
+  directional adjacency such as left, right, up and down.
+
+Spatial placement behavior is specified separately in
+[spatial_mode/SPATIAL_MODE_SPECIFICATION.md](spatial_mode/SPATIAL_MODE_SPECIFICATION.md).
 
 ## Configuration
 

@@ -76,6 +76,7 @@ function M.clone_workspace_state(workspace_state)
         config_signature = workspace_state.config_signature,
         pending_layout_update = workspace_state.pending_layout_update,
         pending_viewport_update = workspace_state.pending_viewport_update,
+        pending_spatial_event = type(workspace_state.pending_spatial_event) == "table" and copy_map(workspace_state.pending_spatial_event) or nil,
     }
 end
 
@@ -88,6 +89,7 @@ function M.commit_workspace_state(workspace_state, draft_state)
     workspace_state.config_signature = draft_state.config_signature
     workspace_state.pending_layout_update = draft_state.pending_layout_update
     workspace_state.pending_viewport_update = draft_state.pending_viewport_update
+    workspace_state.pending_spatial_event = type(draft_state.pending_spatial_event) == "table" and copy_map(draft_state.pending_spatial_event) or nil
 end
 
 function M.set_focused_id(workspace_state, id)

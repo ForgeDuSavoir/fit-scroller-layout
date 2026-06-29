@@ -82,6 +82,7 @@ end
 
 function M.sync(workspace_state, descriptors, state, insert_context)
     insert_context = insert_context or {}
+    local placement_priority = insert_context.placement_priority or "order"
 
     local valid, validation_err = validate_descriptors(descriptors)
     if not valid then
@@ -114,17 +115,22 @@ function M.sync(workspace_state, descriptors, state, insert_context)
     for _, descriptor in ipairs(descriptors or {}) do
         local id = descriptor.id
         if not contains(workspace_state.order, id) then
-            if batch_insert_index then
-                batch_insert_index = batch_insert_index + 1
+            if placement_priority == "spatial" then
+                table.insert(workspace_state.order, id)
             else
-                batch_insert_index = insertion_index(workspace_state.order, {
-                    insert_mode = insert_context.insert_mode,
-                    focused_id = previous_focused_id,
-                    last_visible_id = insert_context.last_visible_id,
-                })
+                if batch_insert_index then
+                    batch_insert_index = batch_insert_index + 1
+                else
+                    batch_insert_index = insertion_index(workspace_state.order, {
+                        insert_mode = insert_context.insert_mode,
+                        focused_id = previous_focused_id,
+                        last_visible_id = insert_context.last_visible_id,
+                    })
+                end
+
+                insert_at(workspace_state.order, batch_insert_index, id)
             end
 
-            insert_at(workspace_state.order, batch_insert_index, id)
             table.insert(inserted_ids, id)
         end
     end
@@ -155,6 +161,7 @@ function M.sync(workspace_state, descriptors, state, insert_context)
 
     return ordered, {
         inserted_ids = inserted_ids,
+        added_ids = inserted_ids,
         removed_ids = removed_ids,
         structural_changed = #inserted_ids > 0 or #removed_ids > 0,
         focus_changed = focus_changed,

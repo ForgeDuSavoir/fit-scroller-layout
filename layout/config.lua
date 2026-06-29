@@ -15,6 +15,11 @@ local VALID_INSERT_MODES = {
     before_focused = true,
 }
 
+local VALID_PLACEMENT_PRIORITIES = {
+    order = true,
+    spatial = true,
+}
+
 M.raw_config = {
     default = {
         allowed_dimensions = {
@@ -24,6 +29,7 @@ M.raw_config = {
         },
         scroll_direction = "right",
         insert_mode = "view",
+        placement_priority = "order",
     },
     displays = {},
 }
@@ -95,6 +101,11 @@ local function normalize(raw_display_config, display_id)
         return nil, "fit-scroller: display " .. tostring(display_id) .. " insert_mode must be one of last, first, view, after_focused, before_focused"
     end
 
+    local placement_priority = raw_display_config.placement_priority or "order"
+    if not VALID_PLACEMENT_PRIORITIES[placement_priority] then
+        return nil, "fit-scroller: display " .. tostring(display_id) .. " placement_priority must be one of order, spatial"
+    end
+
     local dimensions = {}
     local by_key = {}
 
@@ -136,6 +147,7 @@ local function normalize(raw_display_config, display_id)
         toggle_cycle = cycle,
         scroll_direction = direction,
         insert_mode = insert_mode,
+        placement_priority = placement_priority,
     }
 end
 
@@ -152,6 +164,7 @@ function M.resolve_display(raw_config, display_id)
         allowed_dimensions = copy_array(raw_config.default.allowed_dimensions),
         scroll_direction = raw_config.default.scroll_direction,
         insert_mode = raw_config.default.insert_mode,
+        placement_priority = raw_config.default.placement_priority,
     }
 
     local displays = raw_config.displays
@@ -165,6 +178,9 @@ function M.resolve_display(raw_config, display_id)
         end
         if override.insert_mode ~= nil then
             effective.insert_mode = override.insert_mode
+        end
+        if override.placement_priority ~= nil then
+            effective.placement_priority = override.placement_priority
         end
     end
 

@@ -56,8 +56,11 @@ layout/
     target_sync.lua
     commands.lua
     geometry.lua
+    spatial_geometry.lua
+    spatial_focus.lua
     traversal.lua
     solver.lua
+    spatial_solver.lua
     viewport.lua
     hyprland_adapter.lua
 ```
@@ -201,6 +204,7 @@ Responsibilities:
 - provide `allowed_dimensions`;
 - provide `scroll_direction`;
 - provide `insert_mode`;
+- provide `placement_priority`;
 - support display-specific overrides;
 - reject invalid dimensions;
 - reject duplicate dimensions;
@@ -243,13 +247,18 @@ object with stable fields. The adapter should derive the state key from
 
 ### [`target_sync.lua`](layout/target_sync.md)
 
-Synchronizes live Hyprland targets with `state.order`.
+Synchronizes live Hyprland targets with the workspace target list.
+
+In order mode, that list is the user-visible logical order. In spatial mode,
+the list is only a deterministic internal iteration list and does not define
+placement semantics.
 
 Responsibilities:
 
 - collect currently present target ids;
 - remove ids that no longer exist;
-- insert new ids according to `config.insert_mode`;
+- insert new ids according to `config.insert_mode` in order mode;
+- append new ids for deterministic iteration in spatial mode;
 - preserve the relative order of existing ids;
 - return an ordered target list for the solver.
 
@@ -258,21 +267,23 @@ clean `dimension_mode_by_id` when windows disappear.
 
 ### [`commands.lua`](layout/commands.md)
 
-Parses and executes V1 commands.
+Parses and executes commands.
 
 Supported commands:
 
-- `move previous`;
-- `move next`;
-- `focus previous`;
-- `focus next`;
-- `toggle dimension`.
+- order mode: `move previous`, `move next`, `focus previous`,
+  `focus next`;
+- spatial mode: `move left`, `move right`, `move up`, `move down`,
+  `focus left`, `focus right`, `focus up`, `focus down`;
+- both modes: `toggle dimension`, `reveal focus`, `follow`.
 
 Responsibilities:
 
 - parse raw command strings;
 - reject unknown commands with a readable error;
-- swap the focused id with its predecessor or successor for move commands;
+- swap the focused id with its predecessor or successor for order move
+  commands;
+- emit spatial events for spatial move commands;
 - request focus changes through the adapter for focus commands;
 - cycle dimension mode for `toggle dimension`;
 - return whether recalculation is required.
@@ -280,6 +291,7 @@ Responsibilities:
 Command behavior:
 
 - missing predecessor or successor is a no-op;
+- missing spatial target or candidate is a no-op when no progress is possible;
 - commands that mutate order or dimension mode require recalculation;
 - focus commands require viewport reveal after focus changes.
 
@@ -314,6 +326,37 @@ Responsibilities:
 
 Geometry uses logical coordinates first. Pixel conversion should happen as late
 as possible, ideally in the adapter.
+
+### [`spatial_geometry.lua`](layout/spatial_geometry.md)
+
+Provides host-independent geometry helpers for spatial placement mode.
+
+Responsibilities:
+
+- validate normalized rectangles;
+- compute scroll-axis and cross-axis intervals;
+- compute visibility from `viewport_offset`;
+- detect overlap and adjacency;
+- compute movement and resize distances;
+- detect directional progress.
+
+This module does not place windows, read Hyprland objects or choose layout
+candidates.
+
+### [`spatial_focus.lua`](layout/spatial_focus.md)
+
+Resolves spatial focus directions to target ids.
+
+Responsibilities:
+
+- read focused and candidate rectangles from `state.last_layout`;
+- select candidates in the requested half-plane;
+- rank candidates by perpendicular overlap, directional distance, center
+  distance and stable id;
+- return focus target ids without invoking the solver or Hyprland directly.
+
+This module is used by spatial focus commands. It does not mutate workspace
+state or layout geometry.
 
 ### [`traversal.lua`](layout/traversal.md)
 
@@ -388,6 +431,30 @@ Recommended V1 strategy:
 
 This keeps direction handling separate from packing complexity.
 
+### [`spatial_solver.lua`](layout/spatial_solver.md)
+
+Computes spatial-mode world-space layouts.
+
+Inputs:
+
+- validated spatial configuration;
+- target descriptors;
+- dimension modes;
+- `last_layout` for local events;
+- `viewport_offset`;
+- an explicit spatial event.
+
+Responsibilities:
+
+- validate spatial solver input;
+- preserve forced dimensions;
+- return complete world-space placements;
+- provide initial global rebuild behavior when no previous geometry exists;
+- reject local events that cannot be solved yet without mutating state.
+
+The spatial solver is selected only when `placement_priority = "spatial"`.
+It is not a branch inside the order solver.
+
 ### [`viewport.lua`](layout/viewport.md)
 
 Computes and clamps viewport offset.
@@ -415,13 +482,19 @@ weaker and should be treated as an integration limitation.
 
 ### Window Insertion
 
-New targets are inserted according to the effective `config.insert_mode`.
+In order mode, new targets are inserted according to the effective
+`config.insert_mode`.
 
 The insertion logic belongs to `target_sync.lua`, not to the solver. For
 `insert_mode = "view"`, the adapter provides the last visible id from
 `state.last_layout` and `state.viewport_offset`.
 
-The solver must only consume the resulting order.
+In spatial mode, `insert_mode` is ignored. `target_sync.lua` appends new ids
+only for deterministic iteration, and `spatial_solver.lua` places new windows
+from geometry.
+
+The order solver consumes the resulting logical order. The spatial solver must
+not treat that internal list as user-visible placement order.
 
 ### Forced Dimensions
 

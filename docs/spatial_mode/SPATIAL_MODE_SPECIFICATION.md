@@ -2,8 +2,7 @@
 
 ## Status
 
-This document specifies the intended behavior for Fit Scroller's future spatial
-placement mode.
+This document specifies Fit Scroller's spatial placement mode.
 
 The detailed technical design is documented in
 [SPATIAL_MODE_TECHNICAL_SPECIFICATION.md](SPATIAL_MODE_TECHNICAL_SPECIFICATION.md).
@@ -152,7 +151,8 @@ SpatialSolverInput = {
     last_layout = LastLayout,
     viewport_offset = 0,
     event = {
-        kind = "window_added" | "window_removed" | "dimension_changed" | "move",
+        kind = "window_added" | "window_removed" |
+               "dimension_forced" | "dimension_auto" | "move",
         target_id = "C",
         direction = "left" | "right" | "up" | "down",
     },
@@ -245,11 +245,39 @@ possible.
 
 The solver should try, in order:
 
-1. remove the window and keep every other rectangle unchanged;
-2. expand one adjacent auto window into the freed space;
-3. reduce trailing scroll extent without changing remaining dimensions;
-4. compact locally around the freed space;
-5. run a global spatial rebuild.
+1. remove the window from the previous layout;
+2. if the freed space spans the full cross axis, close it by shifting every
+   later window toward the scroll origin;
+3. if the freed space is only partial on the cross axis, try to fill it by
+   resizing an adjacent auto window in the same column or row;
+4. if no hole-repair candidate is valid, preserve remaining rectangles when
+   this does not leave an unacceptable visible hole;
+5. reduce trailing scroll extent through normal extent recomputation;
+6. run a global spatial rebuild.
+
+A freed space spans the full cross axis when it covers the whole viewport
+height in horizontal scroll mode, or the whole viewport width in vertical
+scroll mode.
+
+Full-cross freed spaces are resolved by translation, not by expansion:
+
+- with `scroll_direction = "right"`, later windows move left;
+- with `scroll_direction = "left"`, later windows move right;
+- with `scroll_direction = "down"`, later windows move up;
+- with `scroll_direction = "up"`, later windows move down.
+
+Partial-cross freed spaces are resolved by resizing inside the affected
+column or row. Candidate dimensions are ranked by scroll-axis size:
+
+1. keep the current column or row scroll size;
+2. shrink the column or row scroll size and shift later windows toward the
+   scroll origin;
+3. grow the column or row scroll size and shift later windows away from the
+   scroll origin.
+
+For horizontal scroll, the scroll-axis size is window width and the cross axis
+is height. For vertical scroll, the scroll-axis size is window height and the
+cross axis is width.
 
 Visible holes should be avoided. If holes are allowed internally, they should
 be treated as temporary low-quality states and ranked below equivalent
@@ -270,9 +298,17 @@ The solver should try, in order:
 
 1. resize the target in place if no overlap is introduced;
 2. resize or move adjacent auto windows locally;
-3. extend or reduce scroll to make room;
-4. compact local affected windows;
-5. run a global spatial rebuild.
+3. if the resize creates a full-cross freed space, close it by shifting every
+   later window toward the scroll origin;
+4. if the resize creates a partial-cross freed space, try to fill it by
+   resizing an adjacent auto window in the same column or row;
+5. extend or reduce scroll to keep the resulting layout valid;
+6. compact local affected windows;
+7. run a global spatial rebuild.
+
+The same direction rules and partial-cross dimension ranking used for window
+removal apply to forced-dimension changes. The forced target itself must keep
+the requested forced dimension exactly.
 
 The solver must reject the operation if the forced dimension is not configured
 or cannot fit on the cross axis.
@@ -379,10 +415,16 @@ Recommended cost components, in priority order:
 7. total movement distance;
 8. total resize count;
 9. scroll extent increase;
-10. visible holes;
-11. total holes;
-12. practical fill quality;
-13. stable tie-breakers.
+10. unresolved full-cross holes;
+11. visible holes;
+12. total holes;
+13. practical fill quality;
+14. stable tie-breakers.
+
+Full-cross holes should be treated as structural gaps, not ordinary fill
+quality issues. A valid local compaction that closes a full-cross hole should
+rank above a candidate that keeps the hole and merely preserves more individual
+placements.
 
 Movement distance should compare world-space rectangles before viewport
 translation. Viewport offset changes are handled separately by `viewport.lua`.
@@ -452,7 +494,17 @@ Spatial mode tests should cover:
 - adding a window extends scroll when no visible split is possible;
 - removing a window preserves unchanged windows when possible;
 - removing a window reduces trailing scroll when possible;
+- removing a window compacts full-height holes left for `right` scroll and
+  right for `left` scroll;
+- removing a window compacts full-width holes up for `down` scroll and down
+  for `up` scroll;
+- removing a window can fill partial-cross holes by resizing an auto window in
+  the same column or row;
 - forcing a dimension preserves the forced dimension exactly;
+- forcing a smaller dimension can compact full-cross holes using the same
+  direction rules as removal;
+- forcing a smaller dimension can fill partial-cross holes by resizing an auto
+  window in the same column or row;
 - returning to auto triggers compaction rather than preserving the forced
   geometry unchanged;
 - moving left/right/up/down uses geometry rather than order;

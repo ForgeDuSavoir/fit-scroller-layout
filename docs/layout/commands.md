@@ -7,13 +7,12 @@ state changes.
 
 `commands.lua` supports:
 
-- `move previous`;
-- `move next`;
-- `toggle dimension`;
-- `focus previous`;
-- `focus next`;
-- `reveal focus`;
-- `follow`.
+- `move previous` and `move next` in order mode;
+- `move left`, `move right`, `move up` and `move down` in spatial mode;
+- `toggle dimension` in both modes;
+- `focus previous` and `focus next` in order mode;
+- `focus left`, `focus right`, `focus up` and `focus down` in spatial mode;
+- `reveal focus` and `follow` in both modes.
 
 ## Responsibilities
 
@@ -21,8 +20,10 @@ state changes.
 
 - parse raw `layout_msg` strings;
 - reject unknown commands with readable errors;
-- implement `move previous`;
-- implement `move next`;
+- implement order move commands;
+- implement spatial move command intents;
+- implement order focus commands;
+- implement spatial focus command intents;
 - implement `toggle dimension`;
 - mutate state only after validation succeeds;
 - return whether recalculation is required.
@@ -51,18 +52,36 @@ second token as the action.
 Supported messages:
 
 ```text
-move previous
-move next
-toggle dimension
+order mode:
+    move previous
+    move next
+
+spatial mode:
+    move left
+    move right
+    move up
+    move down
+
+both modes:
+    toggle dimension
 ```
 
 Focus and reveal messages:
 
 ```text
-focus previous
-focus next
-reveal focus
-follow
+order mode:
+    focus previous
+    focus next
+
+spatial mode:
+    focus left
+    focus right
+    focus up
+    focus down
+
+both modes:
+    reveal focus
+    follow
 ```
 
 ## Return Shape
@@ -91,6 +110,13 @@ CommandResult = {
     ok = false,
     error = "fit-scroller: unsupported command: ..."
 }
+```
+
+Mode mismatch errors identify the required placement mode:
+
+```text
+fit-scroller: command requires order placement: move previous
+fit-scroller: command requires spatial placement: move left
 ```
 
 The adapter converts command results into Hyprland `layout_msg` returns.
@@ -128,6 +154,42 @@ after:  A C B
 
 If the focused window has no successor, the command is a no-op.
 
+`move previous` and `move next` are valid only in order mode. In spatial mode
+they must return a mode mismatch error and must not mutate state.
+
+## Spatial Move Commands
+
+Spatial move commands are:
+
+```text
+move left
+move right
+move up
+move down
+```
+
+They are valid only when `placement_priority = "spatial"`.
+
+`commands.lua` does not compute spatial geometry. It returns an event intent
+for the adapter and spatial solver:
+
+```lua
+CommandResult = {
+    ok = true,
+    changed = true,
+    needs_layout_update = true,
+    spatial_event = {
+        kind = "move",
+        target_id = "A",
+        direction = "right",
+    },
+}
+```
+
+If no focused id exists, spatial move commands are no-ops.
+
+Spatial move commands must not mutate `state.order`.
+
 ## `toggle dimension`
 
 Cycles the focused window's dimension mode using the config-provided cycle.
@@ -149,6 +211,27 @@ Expected behavior:
 Command parsing does not validate whether a forced dimension fits on the cross
 axis. That validation belongs to the solver.
 
+In spatial mode, switching to a forced dimension returns a spatial solver
+event:
+
+```lua
+spatial_event = {
+    kind = "dimension_forced",
+    target_id = "A",
+    key = "1.0x1.0",
+}
+```
+
+Returning to `auto` returns a spatial solver event:
+
+```lua
+spatial_event = {
+    kind = "dimension_auto",
+    target_id = "A",
+    previous_key = "0.5x1.0",
+}
+```
+
 ## Unknown Commands
 
 Unknown commands must return readable errors.
@@ -168,8 +251,10 @@ error if Hyprland focus control is unavailable.
 
 - `move previous` swaps with the predecessor.
 - `move next` swaps with the successor.
+- Spatial move commands return spatial move intents.
 - Move commands at order boundaries are no-ops.
 - `toggle dimension` cycles through config dimensions and back to `auto`.
+- Spatial focus commands return spatial focus direction intents.
 - Unknown commands return readable errors.
 - Commands do not directly place windows.
 
@@ -269,6 +354,39 @@ In that case, `commands.lua` must not mutate state.
 
 Focus commands must not use `hyprctl`, `os.execute` or `io.popen` from inside
 the layout callback.
+
+`focus previous` and `focus next` are valid only in order mode. In spatial
+mode they must return a mode mismatch error.
+
+## Spatial Focus Commands
+
+Spatial focus commands are:
+
+```text
+focus left
+focus right
+focus up
+focus down
+```
+
+They are valid only when `placement_priority = "spatial"`.
+
+`commands.lua` does not resolve spatial geometry. It returns the requested
+direction as a focus intent:
+
+```lua
+CommandResult = {
+    ok = true,
+    changed = true,
+    needs_viewport_update = true,
+    focus_direction = "down",
+}
+```
+
+The adapter uses `spatial_focus.lua` to resolve the actual target id from
+`state.last_layout`.
+
+If no focused id exists, spatial focus commands are no-ops.
 
 ## Focus Source Of Truth
 
@@ -382,12 +500,20 @@ Structural commands are:
 
 - `move previous`;
 - `move next`;
+- `move left`;
+- `move right`;
+- `move up`;
+- `move down`;
 - `toggle dimension`.
 
 Viewport-only commands are:
 
 - `focus previous`;
 - `focus next`;
+- `focus left`;
+- `focus right`;
+- `focus up`;
+- `focus down`;
 - `reveal focus`;
 - `follow`.
 
@@ -401,8 +527,16 @@ If no focused id exists:
 
 - `move previous` is a no-op;
 - `move next` is a no-op;
+- `move left` is a no-op;
+- `move right` is a no-op;
+- `move up` is a no-op;
+- `move down` is a no-op;
 - `focus previous` is a no-op;
 - `focus next` is a no-op;
+- `focus left` is a no-op;
+- `focus right` is a no-op;
+- `focus up` is a no-op;
+- `focus down` is a no-op;
 - `toggle dimension` is a no-op.
 
 These are not errors because no user intent can be applied to a missing focus.
@@ -422,9 +556,14 @@ Command tests should cover:
 - toggle from each forced dimension;
 - toggle with an invalid stored forced key;
 - `move previous` and `move next` report structural layout intent;
+- `move left`, `move right`, `move up` and `move down` report spatial
+  structural layout intent in spatial mode;
 - `toggle dimension` reports structural layout intent;
 - `focus previous` and `focus next` report viewport-only intent;
+- `focus left`, `focus right`, `focus up` and `focus down` report spatial
+  viewport-only intent in spatial mode;
 - `reveal focus` and `follow` report viewport-only intent;
+- mode-specific commands are rejected when `placement_priority` does not match;
 - failed validation leaves state unchanged.
 
 ## Guarantees

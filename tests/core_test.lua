@@ -23,6 +23,7 @@ local function test_config_defaults_and_validation()
         },
     }))
     assert_eq(cfg.insert_mode, "view", "insert default")
+    assert_eq(cfg.placement_priority, "order", "placement priority default")
 
     local invalid, err = config.get_for_display("default", {
         default = {
@@ -33,6 +34,52 @@ local function test_config_defaults_and_validation()
     })
     assert_eq(invalid, nil, "invalid insert mode rejected")
     assert_true(err:match("insert_mode"), "insert mode error message")
+end
+
+local function test_config_placement_priority()
+    local order_cfg = assert(config.get_for_display("default", {
+        default = {
+            allowed_dimensions = { { 1, 1 } },
+            scroll_direction = "right",
+            placement_priority = "order",
+        },
+    }))
+    assert_eq(order_cfg.placement_priority, "order", "order placement priority")
+
+    local spatial_cfg = assert(config.get_for_display("default", {
+        default = {
+            allowed_dimensions = { { 1, 1 } },
+            scroll_direction = "right",
+            placement_priority = "spatial",
+            insert_mode = "before_focused",
+        },
+    }))
+    assert_eq(spatial_cfg.placement_priority, "spatial", "spatial placement priority")
+    assert_eq(spatial_cfg.insert_mode, "before_focused", "spatial still validates and exposes insert mode")
+
+    local display_cfg = assert(config.get_for_display("DP-1", {
+        default = {
+            allowed_dimensions = { { 1, 1 } },
+            scroll_direction = "right",
+            placement_priority = "order",
+        },
+        displays = {
+            ["DP-1"] = {
+                placement_priority = "spatial",
+            },
+        },
+    }))
+    assert_eq(display_cfg.placement_priority, "spatial", "display placement priority override")
+
+    local invalid, err = config.get_for_display("default", {
+        default = {
+            allowed_dimensions = { { 1, 1 } },
+            scroll_direction = "right",
+            placement_priority = "geometry",
+        },
+    })
+    assert_eq(invalid, nil, "invalid placement priority rejected")
+    assert_true(err:match("placement_priority"), "placement priority error message")
 end
 
 local function test_target_sync_validation_is_transactional()
@@ -75,6 +122,66 @@ local function test_insert_modes()
         }, state, { insert_mode = mode, last_visible_id = "B" })
         assert_eq(table.concat(ws.order, " "), order, "insert " .. mode)
     end
+end
+
+local function test_spatial_target_sync_ignores_insert_mode()
+    local modes = {
+        "last",
+        "first",
+        "view",
+        "after_focused",
+        "before_focused",
+    }
+
+    for _, mode in ipairs(modes) do
+        state._reset()
+        local ws = state.get_workspace_state("spatial-insert-" .. mode)
+        ws.order = { "A", "B", "C" }
+        ws.focused_id = "B"
+
+        local ordered, result = target_sync.sync(ws, {
+            { id = "A" },
+            { id = "B" },
+            { id = "C" },
+            { id = "D" },
+            { id = "E" },
+        }, state, {
+            placement_priority = "spatial",
+            insert_mode = mode,
+            last_visible_id = "B",
+        })
+
+        assert_true(ordered ~= nil, "spatial sync succeeds for " .. mode)
+        assert_eq(table.concat(ws.order, " "), "A B C D E", "spatial sync appends for stable iteration " .. mode)
+        assert_eq(table.concat(result.added_ids, " "), "D E", "spatial sync added ids " .. mode)
+        assert_eq(table.concat(result.inserted_ids, " "), "D E", "spatial sync inserted compatibility ids " .. mode)
+        assert_eq(result.structural_changed, true, "spatial sync structural change " .. mode)
+    end
+end
+
+local function test_spatial_target_sync_reports_removals_and_cleans_state()
+    state._reset()
+    local ws = state.get_workspace_state("spatial-removal")
+    ws.order = { "A", "B", "C" }
+    ws.focused_id = "B"
+    ws.dimension_mode_by_id.B = { kind = "forced", key = "1.0x1.0" }
+
+    local ordered, result = target_sync.sync(ws, {
+        { id = "A" },
+        { id = "C", active = true },
+        { id = "D" },
+    }, state, {
+        placement_priority = "spatial",
+        insert_mode = "first",
+    })
+
+    assert_true(ordered ~= nil, "spatial removal sync succeeds")
+    assert_eq(table.concat(ws.order, " "), "A C D", "spatial removal preserves existing order and appends new id")
+    assert_eq(table.concat(result.removed_ids, " "), "B", "spatial removed ids")
+    assert_eq(table.concat(result.added_ids, " "), "D", "spatial added ids")
+    assert_eq(ws.dimension_mode_by_id.B, nil, "spatial removal cleans dimension mode")
+    assert_eq(ws.focused_id, "C", "spatial sync updates active focus")
+    assert_eq(result.focus_changed, true, "spatial sync reports focus change")
 end
 
 local function test_solver_output_is_focus_and_viewport_independent()
@@ -159,14 +266,85 @@ local function test_command_intents_and_failed_validation()
     assert_eq(ws.dimension_mode_by_id.A.key, before, "invalid toggle keeps state")
 end
 
+local function test_command_placement_priority_modes()
+    local order_cfg = assert(config.get_for_display("default"))
+    local spatial_cfg = assert(config.get_for_display("default", {
+        default = {
+            allowed_dimensions = { { 1, 1 }, { 0.5, 1 } },
+            scroll_direction = "right",
+            placement_priority = "spatial",
+        },
+    }))
+
+    state._reset()
+    local ws = state.get_workspace_state("command-modes")
+    ws.order = { "A", "B" }
+    ws.focused_id = "A"
+
+    local spatial_move_in_order = commands.execute(ws, order_cfg, state, config, "move left")
+    assert_eq(spatial_move_in_order.ok, false, "spatial move rejected in order mode")
+    assert_true(spatial_move_in_order.error:match("spatial placement"), "spatial move mode error")
+
+    local order_move_in_spatial = commands.execute(ws, spatial_cfg, state, config, "move next")
+    assert_eq(order_move_in_spatial.ok, false, "order move rejected in spatial mode")
+    assert_true(order_move_in_spatial.error:match("order placement"), "order move mode error")
+    assert_eq(table.concat(ws.order, " "), "A B", "rejected order move does not reorder")
+
+    local spatial_move = commands.execute(ws, spatial_cfg, state, config, "move right")
+    assert_true(spatial_move.ok, spatial_move.error)
+    assert_eq(spatial_move.needs_layout_update, true, "spatial move requests layout")
+    assert_eq(spatial_move.spatial_event.kind, "move", "spatial move event kind")
+    assert_eq(spatial_move.spatial_event.target_id, "A", "spatial move target")
+    assert_eq(spatial_move.spatial_event.direction, "right", "spatial move direction")
+    assert_eq(table.concat(ws.order, " "), "A B", "spatial move does not mutate order")
+
+    local spatial_focus_in_order = commands.execute(ws, order_cfg, state, config, "focus down")
+    assert_eq(spatial_focus_in_order.ok, false, "spatial focus rejected in order mode")
+    assert_true(spatial_focus_in_order.error:match("spatial placement"), "spatial focus mode error")
+
+    local order_focus_in_spatial = commands.execute(ws, spatial_cfg, state, config, "focus next")
+    assert_eq(order_focus_in_spatial.ok, false, "order focus rejected in spatial mode")
+    assert_true(order_focus_in_spatial.error:match("order placement"), "order focus mode error")
+
+    local spatial_focus = commands.execute(ws, spatial_cfg, state, config, "focus down")
+    assert_true(spatial_focus.ok, spatial_focus.error)
+    assert_eq(spatial_focus.needs_viewport_update, true, "spatial focus is viewport intent")
+    assert_eq(spatial_focus.needs_layout_update, nil, "spatial focus does not request layout")
+    assert_eq(spatial_focus.focus_direction, "down", "spatial focus direction")
+    assert_eq(spatial_focus.focus_target_id, nil, "spatial focus target is resolved later")
+
+    local toggle = commands.execute(ws, spatial_cfg, state, config, "toggle dimension")
+    assert_true(toggle.ok, toggle.error)
+    assert_eq(toggle.needs_layout_update, true, "toggle dimension remains structural")
+    assert_eq(toggle.spatial_event.kind, "dimension_forced", "spatial toggle reports forced event")
+    assert_eq(toggle.spatial_event.target_id, "A", "spatial toggle target")
+    assert_eq(toggle.spatial_event.key, "1.0x1.0", "spatial toggle forced key")
+    assert_eq(state.get_dimension_mode(ws, "A").kind, "forced", "toggle works in spatial mode")
+
+    local auto = commands.execute(ws, spatial_cfg, state, config, "toggle dimension")
+    assert_true(auto.ok, auto.error)
+    assert_eq(auto.spatial_event.kind, "dimension_forced", "spatial toggle cycles forced dimensions")
+
+    local back_to_auto = commands.execute(ws, spatial_cfg, state, config, "toggle dimension")
+    assert_true(back_to_auto.ok, back_to_auto.error)
+    assert_eq(back_to_auto.spatial_event.kind, "dimension_auto", "spatial toggle reports auto event")
+    assert_eq(back_to_auto.spatial_event.target_id, "A", "spatial auto target")
+    assert_eq(back_to_auto.spatial_event.previous_key, "0.5x1.0", "spatial auto previous key")
+    assert_eq(state.get_dimension_mode(ws, "A").kind, "auto", "toggle returns to auto in spatial mode")
+end
+
 return {
     name = "core",
     tests = {
         test_config_defaults_and_validation,
+        test_config_placement_priority,
         test_target_sync_validation_is_transactional,
         test_insert_modes,
+        test_spatial_target_sync_ignores_insert_mode,
+        test_spatial_target_sync_reports_removals_and_cleans_state,
         test_solver_output_is_focus_and_viewport_independent,
         test_viewport_validation,
         test_command_intents_and_failed_validation,
+        test_command_placement_priority_modes,
     },
 }

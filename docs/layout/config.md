@@ -22,7 +22,8 @@ laid out.
 - expose dimensions as a set for layout semantics;
 - expose the sorted cycle used by `toggle dimension`;
 - expose `scroll_direction`;
-- expose `insert_mode`.
+- expose `insert_mode`;
+- expose `placement_priority`.
 
 It must not:
 
@@ -46,6 +47,7 @@ RawConfig = {
         },
         scroll_direction = "right",
         insert_mode = "view",
+        placement_priority = "order",
     },
     displays = {
         ["eDP-1"] = {
@@ -55,6 +57,7 @@ RawConfig = {
             },
             scroll_direction = "down",
             insert_mode = "after_focused",
+            placement_priority = "order",
         },
         ["DP-1"] = {
             allowed_dimensions = {
@@ -65,6 +68,7 @@ RawConfig = {
             },
             scroll_direction = "right",
             insert_mode = "view",
+            placement_priority = "spatial",
         },
     },
 }
@@ -99,6 +103,7 @@ Config = {
     },
     scroll_direction = "right",
     insert_mode = "view",
+    placement_priority = "order",
 }
 ```
 
@@ -107,7 +112,8 @@ The exact Lua table representation may change, but callers must be able to:
 - list all allowed dimensions;
 - check whether a forced dimension key is allowed;
 - get the next dimension mode for `toggle dimension`;
-- read the configured `insert_mode`.
+- read the configured `insert_mode`;
+- read the configured `placement_priority`.
 
 ## Dimension Keys
 
@@ -144,6 +150,15 @@ Each allowed dimension must:
 - `before_focused`.
 
 Unknown insert modes are invalid configuration.
+
+`placement_priority` must be one of:
+
+- `order`;
+- `spatial`.
+
+The default value is `order`.
+
+Unknown placement priorities are invalid configuration.
 
 Invalid configuration must return a readable error. It must not silently clamp
 or remove dimensions.
@@ -190,6 +205,25 @@ Supported values:
 The default value is `view`.
 
 `insert_mode` is consumed by `target_sync.lua`, not by `solver.lua`.
+
+For `placement_priority = "spatial"`, `insert_mode` is still validated and
+exposed in normalized config, but the first spatial implementation ignores it.
+Spatial window addition is driven by current geometry and viewport visibility
+instead of order insertion anchors.
+
+## Placement Priority
+
+`placement_priority` selects the placement strategy.
+
+Supported values:
+
+- `order`: use the existing order-based layout behavior;
+- `spatial`: use the spatial placement behavior.
+
+The default value is `order`.
+
+Display-specific overrides may change `placement_priority` independently from
+other display configuration fields.
 
 ## Public API
 

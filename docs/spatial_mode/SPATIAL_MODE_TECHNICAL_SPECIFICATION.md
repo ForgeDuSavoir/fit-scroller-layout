@@ -283,7 +283,17 @@ SpatialSolverResult = {
         workspace_extent = 1.0,
     },
     diagnostics = {
-        strategy = "local_split" | "local_compact" | "global_rebuild",
+        strategy = "initial_global_rebuild" | "global_rebuild" |
+                   "global_preserve" | "global_preserve_compact" |
+                   "local_split" | "local_append" |
+                   "local_preserve" | "local_expand" |
+                   "local_compact_full_cross_hole" |
+                   "local_push_compact_full_cross_hole" |
+                   "local_cross_fill" | "local_push_cross_fill" |
+                   "local_resize" | "local_push" |
+                   "local_auto_resize" | "local_auto_compact" |
+                   "local_swap" | "local_split_move" |
+                   "local_scroll_extend" | "noop",
         changed_ids = { "A", "C" },
     },
 }
@@ -322,6 +332,18 @@ For vertical scroll directions:
 - scroll axis is `y`;
 - cross axis is `x`;
 - viewport interval is `[viewport_offset, viewport_offset + 1]`.
+
+For negative scroll directions, world-space coordinates are negative but scroll
+coordinates remain non-negative:
+
+- `left`: a world rect `x = -1, w = 1` maps to scroll interval `[0, 1]`;
+- `left`: a world rect `x = -2, w = 1` maps to scroll interval `[1, 2]`;
+- `up`: a world rect `y = -1, h = 1` maps to scroll interval `[0, 1]`;
+- `up`: a world rect `y = -2, h = 1` maps to scroll interval `[1, 2]`.
+
+Viewport conversion must mirror that model. For `left`, the visible screen x is
+`world_x + viewport_offset + 1`; for `up`, the visible screen y is
+`world_y + viewport_offset + 1`.
 
 The solver may normalize every problem to canonical `right` coordinates, but
 returned placements must use the configured direction's world-space coordinate
@@ -495,7 +517,8 @@ Append candidate rules:
 - append before the current minimum scroll-axis start for `left` or `up`;
 - choose the largest allowed dimension that does not exceed the cross axis and
   minimizes additional workspace extent;
-- place on the cross axis at `0` unless a better full-cross fill is possible;
+- place on the cross axis at `0` unless another valid cross-axis placement
+  produces better viewport fill without increasing disruption;
 - reveal of the new window happens after solver success through viewport flow.
 
 ## Window Removal Algorithm
@@ -509,20 +532,59 @@ Input event:
 Algorithm:
 
 1. Remove the deleted target from `last_layout`.
-2. Candidate A: keep every remaining rect unchanged.
-3. Candidate B: expand one adjacent auto window into the deleted rect.
-4. Candidate C: reduce trailing scroll extent when the deleted rect was at the
-   scroll boundary.
-5. Candidate D: compact local neighbors toward the freed space.
-6. If no candidate is valid or quality is unacceptable, run global rebuild.
+2. If the deleted rect spans the full cross axis, generate a full-cross
+   compaction candidate.
+3. If the deleted rect is partial on the cross axis, generate partial-cross
+   fill candidates.
+4. Candidate preservation: keep every remaining rect unchanged when no better
+   local repair exists.
+5. Candidate expansion: for partial holes only, expand one adjacent auto window
+   into the deleted rect when the expanded rect matches an allowed dimension.
+6. Reduce trailing scroll extent through workspace extent recomputation.
+7. If no candidate is valid or quality is unacceptable, run global rebuild.
 
 Adjacency:
 
 - two rects are adjacent when their edges touch within epsilon and their
   perpendicular intervals overlap;
 - adjacency should be checked in all four directions;
-- expansion is allowed only when the expanded rect matches an allowed
-  dimension for the adjacent auto window.
+- expansion is allowed only for partial-cross holes and only when the expanded
+  rect matches an allowed dimension for the adjacent auto window.
+
+Full-cross compaction:
+
+- a full-cross hole covers `y = 0..1` for `right` and `left` scroll;
+- a full-cross hole covers `x = 0..1` for `down` and `up` scroll;
+- windows after the hole on the scroll axis are translated by the hole's
+  scroll-axis size;
+- for `right`, later windows shift left;
+- for `left`, later windows shift right;
+- for `down`, later windows shift up;
+- for `up`, later windows shift down;
+- dimensions are preserved during this compaction;
+- the resulting candidate must still validate as non-overlapping and within
+  the cross axis.
+
+Partial-cross fill:
+
+- a partial-cross hole does not cover the full cross axis;
+- the solver searches for an adjacent auto window in the same column or row;
+- the selected window expands on the cross axis to cover the hole;
+- the selected window may keep, shrink or grow its scroll-axis size if the
+  resulting rectangle matches an allowed dimension;
+- if the column or row scroll-axis size changes, later windows on the scroll
+  axis are shifted to keep the layout non-overlapping;
+- forced windows must not be resized by partial-cross fill.
+
+Partial-cross dimension ranking:
+
+1. keep the selected column or row scroll-axis size;
+2. shrink the selected column or row scroll-axis size;
+3. grow the selected column or row scroll-axis size.
+
+Within the shrink group, prefer the largest shrink result that is valid. Within
+the grow group, prefer the smallest grow result that is valid. After this
+priority, rank by workspace extent and stable ids.
 
 Persistent holes are not supported in the first implementation. A keep-unchanged
 candidate with a visible hole may be valid only if no local hole-free candidate
@@ -542,8 +604,13 @@ Algorithm:
 2. Try resizing the target around its current top-left position.
 3. Try resizing around its current center.
 4. Try resizing while pushing overlapping auto neighbors away locally.
-5. Try extending scroll to fit pushed windows.
-6. Run global rebuild if local candidates fail.
+5. Detect scroll-axis holes freed by the forced resize.
+6. For full-cross freed holes, generate compaction candidates using the same
+   direction-aware translation rules as window removal.
+7. For partial-cross freed holes, generate partial-cross fill candidates using
+   the same column or row resize ranking as window removal.
+8. Try extending scroll to fit pushed windows.
+9. Run global rebuild if local candidates fail.
 
 Neighbor pushes:
 
@@ -555,6 +622,10 @@ Neighbor pushes:
 
 If the forced dimension cannot fit on the cross axis, return an error and keep
 the previous forced or auto mode unchanged through the adapter transaction.
+
+Full-cross and partial-cross repair never changes the forced target's requested
+dimension. It may move or resize only eligible auto windows, and every resized
+auto window must end on one configured allowed dimension.
 
 ## Return To Auto Algorithm
 
@@ -803,8 +874,23 @@ Solver tests:
 - changing `insert_mode` does not change the addition result;
 - adding one window appends on the scroll axis when no split exists;
 - removing one window preserves remaining rects when no visible hole results;
-- removing one window expands an adjacent auto window when valid;
+- removing one trailing full-cross window reduces scroll extent without
+  expanding the remaining window;
+- removing one full-cross middle window compacts later windows toward the
+  scroll origin;
+- full-cross compaction shifts later windows left for `right` scroll;
+- full-cross compaction shifts later windows right for `left` scroll;
+- full-cross compaction shifts later windows up for `down` scroll;
+- full-cross compaction shifts later windows down for `up` scroll;
+- removing one partial-cross window can resize an auto window in the same
+  column or row;
+- partial-cross repair keeps scroll-axis size when possible, shrinks it when
+  keeping is not possible, and grows it only as a last local option;
+- partial-cross repair uses width as scroll-axis size in horizontal scroll and
+  height as scroll-axis size in vertical scroll;
 - forcing a dimension preserves that dimension exactly;
+- forcing a smaller dimension can compact a full-cross freed hole;
+- forcing a smaller dimension can repair a partial-cross freed hole;
 - returning to auto can shrink a previously forced-large window;
 - returning to auto can grow a previously forced-small window;
 - moving left/right/up/down changes the focused window geometry in that

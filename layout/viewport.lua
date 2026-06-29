@@ -88,8 +88,13 @@ function M.reveal(input)
         return { ok = false, error = "fit-scroller: focused window rectangle is invalid" }
     end
 
-    local window_start = math.abs(start)
-    local window_end = window_start + size
+    local window_start = start
+    local window_end = start + size
+    if info.scroll_sign == -1 then
+        window_start = math.abs(start + size)
+        window_end = math.abs(start)
+    end
+
     local viewport_start = previous
     local viewport_end = previous + viewport_size
     local next_offset = previous

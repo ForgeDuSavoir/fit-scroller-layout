@@ -209,10 +209,14 @@ layout_msg(ctx, msg)
 Commands still do not place windows directly. Any resulting placement happens
 through the next `recalculate(ctx)` call.
 
-### Insert Context
+### Target Synchronization Context
 
 When synchronizing targets, the adapter must pass the effective
-`config.insert_mode` to `target_sync.lua`.
+`config.placement_priority` and `config.insert_mode` to `target_sync.lua`.
+
+For `placement_priority = "spatial"`, `target_sync.lua` ignores
+`insert_mode`, but the adapter still passes the normalized value so the sync
+context is complete and mode-aware.
 
 For `insert_mode = "view"`, the adapter is responsible for computing the last
 currently visible target id before synchronization. It should use:
@@ -252,20 +256,44 @@ structural recalculate(ctx)
     -> collect target descriptors
     -> get workspace state
     -> synchronize targets
-    -> call solver.solve(...)
-    -> store state.last_layout
+    -> call solver.solve(...) or spatial_solver.solve(...)
+    -> validate complete layout output
     -> convert placements to Hyprland areas
     -> call target:place(area)
+    -> store state.last_layout
+    -> validate draft workspace state
+    -> commit workspace state
 ```
 
 The adapter must not call the solver for focus-only or viewport-only updates.
 Those updates reuse `state.last_layout`.
+
+For structural updates, the adapter selects the solver from
+`config.placement_priority`:
+
+- `order`: call `solver.solve(...)` without focus or viewport input;
+- `spatial`: call `spatial_solver.solve(...)` with `last_layout`,
+  `viewport_offset` and an explicit spatial event.
 
 Hyprland may call `recalculate(ctx)` after a successful `layout_msg(ctx, msg)`,
 including after viewport-only messages such as `follow`. The adapter must
 therefore preserve the intent of the triggering message. If the pending intent
 is viewport-only, the next placement pass must reuse `state.last_layout`
 instead of calling `solver.solve(...)`.
+
+Structural `layout_msg(ctx, msg)` commands use the same transaction boundary as
+`recalculate(ctx)`: command mutation is applied to a draft state, the selected
+solver is run, viewport and rectangle conversion are validated, all targets are
+placeable, and only then is the draft committed. This prevents a failed spatial
+move or dimension toggle from committing `dimension_mode_by_id`,
+`pending_spatial_event`, `viewport_offset` or `last_layout`.
+
+Before placement, the adapter validates that solver output is complete:
+
+- every current target has a placement and dimension;
+- no unknown placements or dimensions are present;
+- all rectangles are finite and positive;
+- `workspace_extent` is finite and non-negative.
 
 ### Applying Placements
 

@@ -33,6 +33,8 @@ local commands, commands_load_err = load_relative("commands.lua")
 local geometry, geometry_load_err = load_relative("geometry.lua")
 local traversal, traversal_load_err = load_relative("traversal.lua")
 local solver, solver_load_err = load_relative("solver.lua")
+local spatial_geometry, spatial_geometry_load_err = load_relative("spatial_geometry.lua")
+local spatial_solver, spatial_solver_load_err = load_relative("spatial_solver.lua")
 local viewport, viewport_load_err = load_relative("viewport.lua")
 
 local load_err = config_load_err
@@ -42,6 +44,8 @@ local load_err = config_load_err
     or geometry_load_err
     or traversal_load_err
     or solver_load_err
+    or spatial_geometry_load_err
+    or spatial_solver_load_err
     or viewport_load_err
 if load_err then
     error(load_err)
@@ -50,6 +54,10 @@ end
 solver.set_dependencies({
     geometry = geometry,
     traversal = traversal,
+})
+
+spatial_solver.set_dependencies({
+    spatial_geometry = spatial_geometry,
 })
 
 viewport.set_dependencies({
@@ -271,6 +279,7 @@ end
 M._display_id = display_id
 M._display_candidates = display_candidates
 M._config = config
+M._state = state
 
 local function workspace_context(ctx, workspace_state)
     local descriptors = target_descriptors(ctx.targets)
@@ -279,12 +288,13 @@ local function workspace_context(ctx, workspace_state)
         return nil, err
     end
     local last_visible_id = nil
-    if effective_config.insert_mode == "view" then
+    if effective_config.placement_priority == "order" and effective_config.insert_mode == "view" then
         last_visible_id = M.last_visible_id(workspace_state, effective_config)
     end
 
     local ordered_targets, sync_result = target_sync.sync(workspace_state, descriptors, state, {
         insert_mode = effective_config.insert_mode,
+        placement_priority = effective_config.placement_priority,
         last_visible_id = last_visible_id,
     })
     if not ordered_targets then
@@ -304,6 +314,7 @@ local function config_signature(effective_config)
         "display=" .. tostring(effective_config.display_id),
         "direction=" .. tostring(effective_config.scroll_direction),
         "insert=" .. tostring(effective_config.insert_mode),
+        "placement=" .. tostring(effective_config.placement_priority),
     }
 
     for _, key in ipairs(effective_config.toggle_cycle or {}) do
@@ -313,12 +324,22 @@ local function config_signature(effective_config)
     return table.concat(parts, ";")
 end
 
+M._config_signature = config_signature
+
 local function descriptors_by_id(descriptors)
     local by_id = {}
     for _, descriptor in ipairs(descriptors or {}) do
         by_id[descriptor.id] = descriptor
     end
     return by_id
+end
+
+local function descriptor_ids(descriptors)
+    local ids = {}
+    for _, descriptor in ipairs(descriptors or {}) do
+        table.insert(ids, descriptor.id)
+    end
+    return ids
 end
 
 local function sorted_keys(value)
@@ -391,6 +412,7 @@ local function debug_config(ctx)
 
     table.insert(lines, "scroll_direction=" .. tostring(effective_config.scroll_direction))
     table.insert(lines, "insert_mode=" .. tostring(effective_config.insert_mode))
+    table.insert(lines, "placement_priority=" .. tostring(effective_config.placement_priority))
     table.insert(lines, "dimensions=" .. table.concat(effective_config.toggle_cycle or {}, ", "))
     table.insert(lines, "config_signature=" .. config_signature(effective_config))
     return table.concat(lines, "\n")
@@ -423,7 +445,104 @@ local function convert_rect(ctx, rect)
     return geometry.round_rect(rect, area)
 end
 
+local function is_finite_number(value)
+    return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
+end
+
+local function validate_layout_output(layout, ordered_targets)
+    if type(layout) ~= "table" then
+        return nil, "fit-scroller: solver produced no layout"
+    end
+
+    if type(layout.placements_by_id) ~= "table" then
+        return nil, "fit-scroller: solver produced no placements"
+    end
+
+    if type(layout.dimensions_by_id) ~= "table" then
+        return nil, "fit-scroller: solver produced no dimensions"
+    end
+
+    if not is_finite_number(layout.workspace_extent) or layout.workspace_extent < 0 then
+        return nil, "fit-scroller: solver produced invalid workspace_extent"
+    end
+
+    local expected = {}
+    for _, descriptor in ipairs(ordered_targets or {}) do
+        local id = descriptor.id
+        expected[id] = true
+
+        local rect = layout.placements_by_id[id]
+        if type(rect) ~= "table" then
+            return nil, "fit-scroller: solver produced no placement for target " .. tostring(id)
+        end
+
+        if not is_finite_number(rect.x) or not is_finite_number(rect.y)
+            or not is_finite_number(rect.w) or rect.w <= 0
+            or not is_finite_number(rect.h) or rect.h <= 0 then
+            return nil, "fit-scroller: solver produced invalid placement for target " .. tostring(id)
+        end
+
+        if type(layout.dimensions_by_id[id]) ~= "table" then
+            return nil, "fit-scroller: solver produced no dimension for target " .. tostring(id)
+        end
+    end
+
+    for id in pairs(layout.placements_by_id) do
+        if not expected[id] then
+            return nil, "fit-scroller: solver produced placement for unknown target " .. tostring(id)
+        end
+    end
+
+    for id in pairs(layout.dimensions_by_id) do
+        if not expected[id] then
+            return nil, "fit-scroller: solver produced dimension for unknown target " .. tostring(id)
+        end
+    end
+
+    return true
+end
+
 local function solve_workspace(workspace)
+    if workspace.config.placement_priority == "spatial" then
+        local previous_layout = workspace.state.last_layout
+        local event = workspace.state.pending_spatial_event
+
+        if not event then
+            local added_ids = workspace.sync.added_ids or workspace.sync.inserted_ids or {}
+            local removed_ids = workspace.sync.removed_ids or {}
+            local current_signature = workspace.state.config_signature
+            local next_signature = config_signature(workspace.config)
+
+            if type(previous_layout) ~= "table" then
+                event = { kind = "initial" }
+            elseif current_signature ~= next_signature then
+                event = { kind = "config_changed" }
+            elseif #added_ids == 1 and #removed_ids == 0 then
+                event = { kind = "window_added", target_id = added_ids[1] }
+            elseif #removed_ids == 1 and #added_ids == 0 then
+                local removed_id = removed_ids[1]
+                event = {
+                    kind = "window_removed",
+                    target_id = removed_id,
+                    previous_rect = previous_layout.placements_by_id and previous_layout.placements_by_id[removed_id],
+                }
+            elseif #added_ids > 0 or #removed_ids > 0 or workspace.state.pending_layout_update then
+                event = { kind = "config_changed" }
+            else
+                event = { kind = "config_changed" }
+            end
+        end
+
+        return spatial_solver.solve({
+            config = workspace.config,
+            targets = workspace.targets,
+            dimension_mode_by_id = workspace.state.dimension_mode_by_id,
+            last_layout = previous_layout,
+            viewport_offset = state.get_viewport_offset(workspace.state),
+            event = event,
+        })
+    end
+
     return solver.solve({
         config = workspace.config,
         targets = workspace.targets,
@@ -587,12 +706,12 @@ apply_viewport_offset = function(rect, direction, offset)
         if info.scroll_sign == 1 then
             visible.x = visible.x - offset
         else
-            visible.x = visible.x + offset
+            visible.x = visible.x + offset + 1
         end
     elseif info.scroll_sign == 1 then
         visible.y = visible.y - offset
     else
-        visible.y = visible.y + offset
+        visible.y = visible.y + offset + 1
     end
 
     return visible
@@ -706,6 +825,11 @@ function M.recalculate(ctx)
         state.set_viewport_offset(draft_state, 0)
         draft_state.pending_layout_update = false
         draft_state.pending_viewport_update = false
+        draft_state.pending_spatial_event = nil
+        local valid_state, state_err = state.validate_workspace_state(draft_state, {})
+        if not valid_state then
+            return state_err
+        end
         state.commit_workspace_state(current_state, draft_state)
         return
     end
@@ -723,6 +847,11 @@ function M.recalculate(ctx)
             return recover_with_last_layout(ctx, current_state, workspace.config, result.error)
         end
         layout = result.layout
+    end
+
+    local valid_layout, layout_err = validate_layout_output(layout, ordered_targets)
+    if not valid_layout then
+        return recover_with_last_layout(ctx, current_state, workspace.config, layout_err)
     end
 
     local viewport_ok, viewport_err = update_viewport_offset(workspace, layout, reveal_target_id(workspace, did_solve))
@@ -744,6 +873,11 @@ function M.recalculate(ctx)
     draft_state.config_signature = config_signature(workspace.config)
     draft_state.pending_layout_update = false
     draft_state.pending_viewport_update = false
+    draft_state.pending_spatial_event = nil
+    local valid_state, state_err = state.validate_workspace_state(draft_state, descriptor_ids(ordered_targets))
+    if not valid_state then
+        return recover_with_last_layout(ctx, current_state, workspace.config, state_err)
+    end
     state.commit_workspace_state(current_state, draft_state)
 end
 
@@ -772,12 +906,48 @@ function M.layout_msg(ctx, msg)
         return result.error
     end
 
+    if result.spatial_event then
+        workspace.state.pending_spatial_event = result.spatial_event
+    end
+
     if result.needs_layout_update then
         local validation = solve_workspace(workspace)
         if not validation.ok then
             return validation.error
         end
-        draft_state.pending_layout_update = true
+
+        local layout = validation.layout
+        local valid_layout, layout_err = validate_layout_output(layout, workspace.targets)
+        if not valid_layout then
+            return layout_err
+        end
+
+        local viewport_ok, viewport_err = update_viewport_offset(workspace, layout, reveal_target_id(workspace, true))
+        if not viewport_ok then
+            return viewport_err
+        end
+
+        local converted_by_id, convert_err = prepare_areas(ctx, workspace.targets, workspace.config, layout)
+        if not converted_by_id then
+            return convert_err
+        end
+
+        local placed, place_err = place_areas(workspace.targets, converted_by_id)
+        if not placed then
+            return place_err
+        end
+
+        state.update_last_layout(draft_state, layout)
+        draft_state.config_signature = config_signature(workspace.config)
+        draft_state.pending_layout_update = false
+        draft_state.pending_viewport_update = false
+        draft_state.pending_spatial_event = nil
+        local valid_state, state_err = state.validate_workspace_state(draft_state, descriptor_ids(workspace.targets))
+        if not valid_state then
+            return state_err
+        end
+        state.commit_workspace_state(current_state, draft_state)
+        return true
     end
 
     if result.focus_target_id then
@@ -796,6 +966,10 @@ function M.layout_msg(ctx, msg)
         draft_state.pending_viewport_update = true
     end
 
+    local valid_state, state_err = state.validate_workspace_state(draft_state, descriptor_ids(workspace.targets))
+    if not valid_state then
+        return state_err
+    end
     state.commit_workspace_state(current_state, draft_state)
     return true
 end
