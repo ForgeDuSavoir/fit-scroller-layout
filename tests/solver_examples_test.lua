@@ -340,6 +340,14 @@ local FORCED_EXAMPLES = {
             { id = "C", forced = "1.0x1.0", expected = "1.0x1.0" },
         },
     },
+    {
+        name = "forced trailing fullscreen anchor keeps preceding singleton compact",
+        dimensions = CONFIG_1,
+        windows = {
+            { id = "A", expected = "0.5x1.0" },
+            { id = "B", forced = "1.0x1.0", expected = "1.0x1.0" },
+        },
+    },
 }
 
 local function normalized_config(dimensions)

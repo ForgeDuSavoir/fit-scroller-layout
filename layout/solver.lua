@@ -203,7 +203,7 @@ local function fullscreen_forced_group_metrics(candidate, input)
         return 0, 0, 0
     end
 
-    if group_count > 1 or has_two_target_group then
+    if group_count > 1 or has_two_target_group or #input.targets == 2 then
         group_fill_gap = 0
     end
 
