@@ -8,12 +8,12 @@ state and display configuration.
 It is the main implementation of the product rules in `SPECIFICATION.md`.
 
 The detailed official solver behavior is documented in
-[../solver/detailed-logic.md](../solver/detailed-logic.md).
+[../solver/detailed-logic.md](detailed-logic.md).
 
 Validated implementation examples are documented in:
 
-- [../solver/base-examples.md](../solver/base-examples.md);
-- [../solver/forced-examples.md](../solver/forced-examples.md).
+- [../solver/base-examples.md](base-examples.md);
+- [../solver/forced-examples.md](forced-examples.md).
 
 ## Responsibilities
 
@@ -39,7 +39,9 @@ It must not:
 - read focused id;
 - read viewport offset;
 - decide whether the focused window is visible;
-- implement viewport reveal. Focus reveal belongs to `viewport.lua`.
+- implement viewport reveal. Focus reveal belongs to `viewport.lua`;
+- implement `center_windows`. Centering belongs to the adapter as a final
+  presentation offset.
 
 ## Inputs
 
@@ -145,7 +147,7 @@ The current official solver behavior uses one candidate-based strategy.
 
 The complete candidate model, forced-dimension rules, ranking rules and
 examples are documented in
-[../solver/detailed-logic.md](../solver/detailed-logic.md).
+[../solver/detailed-logic.md](detailed-logic.md).
 
 ## Forced Dimensions
 
@@ -162,7 +164,7 @@ error. The caller must preserve the previous valid state and layout.
 Workspace extent is measured only on the scroll axis.
 
 Smaller extent wins according to the ranking documented in
-[../solver/detailed-logic.md](../solver/detailed-logic.md).
+[../solver/detailed-logic.md](detailed-logic.md).
 
 ### Stable Position Order
 
@@ -212,7 +214,7 @@ The current solver intentionally does not implement:
 - Returned placements preserve logical order.
 - Overflow occurs only on the configured scroll axis.
 - Candidate ranking follows
-  [../solver/detailed-logic.md](../solver/detailed-logic.md).
+  [../solver/detailed-logic.md](detailed-logic.md).
 
 ## Hardening
 
@@ -324,8 +326,8 @@ The adapter should enforce this by not passing focus or viewport state to
 
 Solver logic tests must cover the official validation corpora:
 
-- [../solver/base-examples.md](../solver/base-examples.md);
-- [../solver/forced-examples.md](../solver/forced-examples.md).
+- [../solver/base-examples.md](base-examples.md);
+- [../solver/forced-examples.md](forced-examples.md).
 
 Tests should also prove:
 
@@ -363,9 +365,9 @@ Solver tests should cover:
 - missing forced dimension key rejected;
 - forced dimension too large for cross axis rejected;
 - many equivalent candidates produce stable output;
-- all examples in [../solver/base-examples.md](../solver/base-examples.md);
+- all examples in [../solver/base-examples.md](base-examples.md);
 - all examples in
-  [../solver/forced-examples.md](../solver/forced-examples.md);
+  [../solver/forced-examples.md](forced-examples.md);
 - all four directions preserve logical order;
 - focus changes do not change solver output;
 - viewport offset changes do not change solver output;

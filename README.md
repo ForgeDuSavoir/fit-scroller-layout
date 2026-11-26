@@ -10,10 +10,10 @@ When additional windows can no longer fit while respecting those dimension const
 This concept is currently implemented as a custom layout for Hyprland, but the underlying ideas are independent of any specific window manager.
 
 The detailed behavioral contract is documented in
-[docs/SPECIFICATION.md](docs/SPECIFICATION.md).
+[docs/SPECIFICATION.md](SPECIFICATION.md).
 
 The detailed solver behavior and validation examples are documented in
-[docs/solver/README.md](docs/solver/README.md).
+[docs/solver/README.md](2%20Projects/Sleeping/fit-scroller-layout/docs/solver/README.md).
 
 The future spatial placement mode is specified in
 [docs/SPATIAL_MODE_SPECIFICATION.md](SPATIAL_MODE_SPECIFICATION.md).
@@ -23,13 +23,13 @@ The implementation plan is tracked in
 [docs/SPATIAL_MODE_IMPLEMENTATION_PLAN.md](SPATIAL_MODE_IMPLEMENTATION_PLAN.md).
 
 The first implementation architecture is documented in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+[docs/ARCHITECTURE.md](2%20Projects/Sleeping/fit-scroller-layout/docs/ARCHITECTURE.md).
 
 The Hyprland installation and configuration guide is documented in
-[docs/USER_GUIDE_FOR_HYPRLAND_CUSTOM_LAYOUT.md](docs/USER_GUIDE_FOR_HYPRLAND_CUSTOM_LAYOUT.md).
+[docs/USER_GUIDE_FOR_HYPRLAND_CUSTOM_LAYOUT.md](USER_GUIDE_FOR_HYPRLAND_CUSTOM_LAYOUT.md).
 
 The official release process is documented in
-[docs/RELEASE_PROCESS.md](docs/RELEASE_PROCESS.md).
+[docs/RELEASE_PROCESS.md](RELEASE_PROCESS.md).
 
 ---
 

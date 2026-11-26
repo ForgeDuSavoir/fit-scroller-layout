@@ -3,7 +3,7 @@ local support = dofile((debug.getinfo(1, "S").source:sub(2):match("^(.*)/[^/]*$"
 local assert_eq = support.assert_eq
 local assert_true = support.assert_true
 
-local config = support.load_layout("config")
+local config = support.load_layout("config_resolver")
 local spatial_geometry = support.load_layout("spatial_geometry")
 local spatial_solver = support.load_layout("spatial_solver")
 
@@ -372,6 +372,32 @@ local function test_window_added_splits_visible_auto_window()
     assert_eq(result.layout.workspace_extent, 1, "split does not increase extent")
 end
 
+local function test_window_added_prefers_no_scroll_fit_over_smaller_local_split()
+    local ids = { "A", "B" }
+    local result = spatial_solver.solve({
+        config = normalized_config({ { 0.66, 1 }, { 0.5, 1 }, { 0.5, 0.5 } }),
+        targets = targets(ids),
+        dimension_mode_by_id = {},
+        last_layout = last_layout({
+            A = { x = 0, y = 0, w = 0.66, h = 1 },
+        }, {
+            A = { key = "0.66x1.0", w = 0.66, h = 1 },
+        }),
+        viewport_offset = 0,
+        event = { kind = "window_added", target_id = "B" },
+    })
+
+    assert_true(result.ok, result.error)
+    assert_complete_layout(result.layout, ids)
+    assert_no_overlap(result.layout, ids)
+    assert_eq(result.layout.diagnostics.strategy, "global_no_scroll_fit", "window add uses no-scroll fit")
+    assert_eq(result.layout.dimensions_by_id.A.key, "0.5x1.0", "source resized to fit before scroll")
+    assert_eq(result.layout.dimensions_by_id.B.key, "0.5x1.0", "new window resized to fit before scroll")
+    assert_eq(result.layout.placements_by_id.A.x, 0, "source x")
+    assert_eq(result.layout.placements_by_id.B.x, 0.5, "new x")
+    assert_eq(result.layout.workspace_extent, 1, "fit avoids scroll")
+end
+
 local function test_window_added_prefers_visible_split_source()
     local ids = { "A", "B", "C" }
     local result = spatial_solver.solve({
@@ -534,7 +560,7 @@ local function test_window_removed_trailing_window_reduces_extent()
     assert_eq(result.layout.workspace_extent, 1, "trailing removal reduces extent")
 end
 
-local function test_window_removed_preserves_trailing_full_height_hole_and_reduces_extent()
+local function test_window_removed_expands_auto_window_in_place_when_no_scroll_remains()
     local ids = { "A" }
     local result = spatial_solver.solve({
         config = normalized_config({ { 1, 1 }, { 0.5, 1 } }),
@@ -553,11 +579,13 @@ local function test_window_removed_preserves_trailing_full_height_hole_and_reduc
 
     assert_true(result.ok, result.error)
     assert_complete_layout(result.layout, ids)
-    assert_eq(result.layout.diagnostics.strategy, "local_preserve", "trailing full-height hole is not expanded")
-    assert_eq(result.layout.dimensions_by_id.A.key, "0.5x1.0", "auto window dimension preserved")
-    assert_eq(result.layout.placements_by_id.A.x, 0, "preserved x")
-    assert_eq(result.layout.placements_by_id.A.w, 0.5, "preserved width")
-    assert_eq(result.layout.workspace_extent, 0.5, "trailing full-height removal shrinks extent")
+    assert_eq(result.layout.diagnostics.strategy, "local_no_scroll_fill", "no-scroll removal fills viewport")
+    assert_eq(result.layout.dimensions_by_id.A.key, "1.0x1.0", "auto window expands to full screen")
+    assert_eq(result.layout.placements_by_id.A.x, 0, "expanded x origin preserved")
+    assert_eq(result.layout.placements_by_id.A.y, 0, "expanded y origin preserved")
+    assert_eq(result.layout.placements_by_id.A.w, 1, "expanded width")
+    assert_eq(result.layout.placements_by_id.A.h, 1, "expanded height")
+    assert_eq(result.layout.workspace_extent, 1, "filled viewport extent")
 end
 
 local function test_window_removed_compacts_full_height_hole()
@@ -893,6 +921,73 @@ local function test_dimension_forced_does_not_push_forced_neighbor_locally()
     assert_eq(result.layout.dimensions_by_id.B.key, "0.5x1.0", "forced neighbor dimension preserved")
 end
 
+local function test_dimension_forced_rebuilds_auto_windows_to_fit_before_scroll()
+    local ids = { "A", "B", "C" }
+    local result = spatial_solver.solve({
+        config = normalized_config({ { 0.66, 1 }, { 0.5, 1 }, { 0.33, 1 }, { 0.5, 0.5 }, { 0.33, 0.5 } }),
+        targets = targets(ids),
+        dimension_mode_by_id = {
+            C = { kind = "forced", key = "0.66x1.0" },
+        },
+        last_layout = last_layout({
+            A = { x = 0, y = 0, w = 0.5, h = 0.5 },
+            B = { x = 0.5, y = 0, w = 0.5, h = 1 },
+            C = { x = 0, y = 0.5, w = 0.5, h = 0.5 },
+        }, {
+            A = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+            B = { key = "0.5x1.0", w = 0.5, h = 1 },
+            C = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+        }),
+        viewport_offset = 0,
+        event = { kind = "dimension_forced", target_id = "C", key = "0.66x1.0" },
+    })
+
+    assert_true(result.ok, result.error)
+    assert_complete_layout(result.layout, ids)
+    assert_no_overlap(result.layout, ids)
+    assert_eq(result.layout.diagnostics.strategy, "global_no_scroll_fit", "forced dimension uses no-scroll fit")
+    assert_eq(result.layout.dimensions_by_id.A.key, "0.33x0.5", "A shrinks to stacked fit")
+    assert_eq(result.layout.dimensions_by_id.B.key, "0.33x0.5", "B shrinks to stacked fit")
+    assert_eq(result.layout.dimensions_by_id.C.key, "0.66x1.0", "C forced dimension preserved")
+    assert_eq(result.layout.placements_by_id.A.x, 0, "A x")
+    assert_eq(result.layout.placements_by_id.A.y, 0, "A y")
+    assert_eq(result.layout.placements_by_id.B.x, 0, "B x")
+    assert_eq(result.layout.placements_by_id.B.y, 0.5, "B y")
+    assert_eq(result.layout.placements_by_id.C.x, 0.33, "C x")
+    assert_eq(result.layout.placements_by_id.C.y, 0, "C y")
+    assert_eq(result.layout.workspace_extent, 0.99, "fit avoids scroll")
+end
+
+local function test_window_added_after_forced_column_uses_full_height_append_dimension()
+    local ids = { "A", "B", "C", "D" }
+    local result = spatial_solver.solve({
+        config = normalized_config({ { 1, 1 }, { 0.5, 1 }, { 0.5, 0.5 } }),
+        targets = targets(ids),
+        dimension_mode_by_id = {
+            C = { kind = "forced", key = "0.5x1.0" },
+        },
+        last_layout = last_layout({
+            A = { x = 0, y = 0, w = 0.5, h = 0.5 },
+            B = { x = 0, y = 0.5, w = 0.5, h = 0.5 },
+            C = { x = 0.5, y = 0, w = 0.5, h = 1 },
+        }, {
+            A = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+            B = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+            C = { key = "0.5x1.0", w = 0.5, h = 1 },
+        }),
+        viewport_offset = 0,
+        event = { kind = "window_added", target_id = "D" },
+    })
+
+    assert_true(result.ok, result.error)
+    assert_complete_layout(result.layout, ids)
+    assert_no_overlap(result.layout, ids)
+    assert_eq(result.layout.diagnostics.strategy, "local_append", "new window appends after forced column")
+    assert_eq(result.layout.dimensions_by_id.D.key, "0.5x1.0", "D uses full-height append dimension")
+    assert_eq(result.layout.placements_by_id.D.x, 1, "D appended after C")
+    assert_eq(result.layout.placements_by_id.D.h, 1, "D full height")
+end
+
 local function test_dimension_forced_rejects_invalid_or_mismatched_key()
     local ids = { "A" }
     local base = {
@@ -919,6 +1014,93 @@ local function test_dimension_forced_rejects_invalid_or_mismatched_key()
     local invalid = spatial_solver.solve(base)
     assert_eq(invalid.ok, false, "invalid forced key rejected")
     assert_true(invalid.error:match("forced dimension"), "invalid key error")
+end
+
+local function test_dimension_auto_after_forced_column_rebuilds_auto_grid()
+    local ids = { "A", "B", "C", "D" }
+    local result = spatial_solver.solve({
+        config = normalized_config({ { 1, 1 }, { 0.5, 1 }, { 0.5, 0.5 } }),
+        targets = targets(ids),
+        dimension_mode_by_id = {},
+        last_layout = last_layout({
+            A = { x = 0, y = 0, w = 0.5, h = 0.5 },
+            B = { x = 0, y = 0.5, w = 0.5, h = 0.5 },
+            C = { x = 0.5, y = 0, w = 0.5, h = 1 },
+            D = { x = 1, y = 0, w = 0.5, h = 1 },
+        }, {
+            A = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+            B = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+            C = { key = "0.5x1.0", w = 0.5, h = 1 },
+            D = { key = "0.5x1.0", w = 0.5, h = 1 },
+        }),
+        viewport_offset = 0,
+        event = { kind = "dimension_auto", target_id = "C", previous_key = "0.5x1.0" },
+    })
+
+    assert_true(result.ok, result.error)
+    assert_complete_layout(result.layout, ids)
+    assert_no_overlap(result.layout, ids)
+    assert_eq(result.layout.diagnostics.strategy, "global_no_scroll_fit", "auto return rebuilds no-scroll grid")
+    assert_eq(result.layout.dimensions_by_id.A.key, "0.5x0.5", "A keeps tile dimension")
+    assert_eq(result.layout.dimensions_by_id.B.key, "0.5x0.5", "B keeps tile dimension")
+    assert_eq(result.layout.dimensions_by_id.C.key, "0.5x0.5", "C becomes tile dimension")
+    assert_eq(result.layout.dimensions_by_id.D.key, "0.5x0.5", "D becomes tile dimension")
+    assert_eq(result.layout.placements_by_id.A.x, 0, "A x")
+    assert_eq(result.layout.placements_by_id.A.y, 0, "A y")
+    assert_eq(result.layout.placements_by_id.B.x, 0, "B x")
+    assert_eq(result.layout.placements_by_id.B.y, 0.5, "B y")
+    assert_eq(result.layout.placements_by_id.C.x, 0.5, "C x")
+    assert_eq(result.layout.placements_by_id.C.y, 0, "C y")
+    assert_eq(result.layout.placements_by_id.D.x, 0.5, "D x")
+    assert_eq(result.layout.placements_by_id.D.y, 0.5, "D y")
+    assert_eq(result.layout.workspace_extent, 1, "auto grid fits viewport")
+end
+
+local function test_dimension_auto_after_forced_column_uses_compact_scroll_fit_when_no_no_scroll_fit_exists()
+    local ids = { "A", "B", "C", "D", "E", "F" }
+    local result = spatial_solver.solve({
+        config = normalized_config({ { 1, 1 }, { 0.5, 1 }, { 0.5, 0.5 } }),
+        targets = targets(ids),
+        dimension_mode_by_id = {},
+        last_layout = last_layout({
+            A = { x = 0, y = 0, w = 0.5, h = 0.5 },
+            B = { x = 0, y = 0.5, w = 0.5, h = 0.5 },
+            C = { x = 0.5, y = 0, w = 0.5, h = 1 },
+            D = { x = 1, y = 0, w = 0.5, h = 0.5 },
+            E = { x = 1, y = 0.5, w = 0.5, h = 0.5 },
+            F = { x = 1.5, y = 0, w = 0.5, h = 1 },
+        }, {
+            A = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+            B = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+            C = { key = "0.5x1.0", w = 0.5, h = 1 },
+            D = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+            E = { key = "0.5x0.5", w = 0.5, h = 0.5 },
+            F = { key = "0.5x1.0", w = 0.5, h = 1 },
+        }),
+        viewport_offset = 0,
+        event = { kind = "dimension_auto", target_id = "C", previous_key = "0.5x1.0" },
+    })
+
+    assert_true(result.ok, result.error)
+    assert_complete_layout(result.layout, ids)
+    assert_no_overlap(result.layout, ids)
+    assert_eq(result.layout.diagnostics.strategy, "global_scroll_fit", "auto return uses compact scroll fit")
+    for _, id in ipairs(ids) do
+        assert_eq(result.layout.dimensions_by_id[id].key, "0.5x0.5", id .. " uses tile dimension")
+    end
+    assert_eq(result.layout.placements_by_id.A.x, 0, "A x")
+    assert_eq(result.layout.placements_by_id.A.y, 0, "A y")
+    assert_eq(result.layout.placements_by_id.B.x, 0, "B x")
+    assert_eq(result.layout.placements_by_id.B.y, 0.5, "B y")
+    assert_eq(result.layout.placements_by_id.C.x, 0.5, "C x")
+    assert_eq(result.layout.placements_by_id.C.y, 0, "C y")
+    assert_eq(result.layout.placements_by_id.D.x, 0.5, "D x")
+    assert_eq(result.layout.placements_by_id.D.y, 0.5, "D y")
+    assert_eq(result.layout.placements_by_id.E.x, 1, "E x")
+    assert_eq(result.layout.placements_by_id.E.y, 0, "E y")
+    assert_eq(result.layout.placements_by_id.F.x, 1, "F x")
+    assert_eq(result.layout.placements_by_id.F.y, 0.5, "F y")
+    assert_eq(result.layout.workspace_extent, 1.5, "compact fit minimizes scroll")
 end
 
 local function test_dimension_auto_shrinks_large_forced_window_and_reduces_extent()
@@ -1211,13 +1393,14 @@ return {
         test_global_rebuild_rejects_invalid_forced_dimension,
         test_local_event_requires_last_layout,
         test_window_added_splits_visible_auto_window,
+        test_window_added_prefers_no_scroll_fit_over_smaller_local_split,
         test_window_added_prefers_visible_split_source,
         test_window_added_appends_when_no_split_exists,
         test_window_added_appends_adjacent_for_negative_scroll_directions,
         test_window_added_does_not_split_forced_source,
         test_window_removed_can_preserve_remaining_rects,
         test_window_removed_trailing_window_reduces_extent,
-        test_window_removed_preserves_trailing_full_height_hole_and_reduces_extent,
+        test_window_removed_expands_auto_window_in_place_when_no_scroll_remains,
         test_window_removed_compacts_full_height_hole,
         test_window_removed_compacts_full_height_hole_leftward_scroll,
         test_window_removed_compacts_full_width_hole_upward_scroll,
@@ -1229,7 +1412,11 @@ return {
         test_dimension_forced_pushes_overlapping_auto_neighbor,
         test_dimension_forced_compacts_full_height_hole,
         test_dimension_forced_does_not_push_forced_neighbor_locally,
+        test_dimension_forced_rebuilds_auto_windows_to_fit_before_scroll,
+        test_window_added_after_forced_column_uses_full_height_append_dimension,
         test_dimension_forced_rejects_invalid_or_mismatched_key,
+        test_dimension_auto_after_forced_column_rebuilds_auto_grid,
+        test_dimension_auto_after_forced_column_uses_compact_scroll_fit_when_no_no_scroll_fit_exists,
         test_dimension_auto_shrinks_large_forced_window_and_reduces_extent,
         test_dimension_auto_grows_small_forced_window_when_no_compaction_gain_exists,
         test_dimension_auto_fills_visible_gap_without_preferring_previous_forced_dimension,

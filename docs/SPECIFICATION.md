@@ -8,7 +8,7 @@ It defines the expected behavior of Fit Scroller independently from any
 particular window manager.
 
 The detailed solver algorithm and validation examples are documented in
-[solver/README.md](solver/README.md).
+[solver/README.md](2%20Projects/Sleeping/fit-scroller-layout/docs/solver/README.md).
 
 ## Version Scope
 
@@ -115,7 +115,7 @@ Fit Scroller supports two placement priorities:
   directional adjacency such as left, right, up and down.
 
 Spatial placement behavior is specified separately in
-[spatial_mode/SPATIAL_MODE_SPECIFICATION.md](spatial_mode/SPATIAL_MODE_SPECIFICATION.md).
+[spatial_mode/SPATIAL_MODE_SPECIFICATION.md](SPATIAL_MODE_SPECIFICATION.md).
 
 ## Configuration
 
@@ -364,7 +364,7 @@ It follows these priorities:
 7. choose deterministic results when candidates are otherwise equivalent.
 
 The detailed candidate model, ranking rules and validation examples are
-documented in [solver/README.md](solver/README.md).
+documented in [solver/README.md](2%20Projects/Sleeping/fit-scroller-layout/docs/solver/README.md).
 
 ### Reflow stability
 
@@ -386,6 +386,21 @@ dimension after a lifecycle or configuration change. Stability may be used as
 a final tie-breaker, but it must not override filling visible space, preserving
 order or minimizing scroll.
 
+When a window is returned from forced mode to auto mode, the previous forced
+dimension must not be treated as a preferred auto dimension. If the best local
+candidate would keep that previous forced dimension and a valid no-scroll
+recomposition can assign a different allowed auto dimension, Fit Scroller may
+recompose the auto windows.
+
+Returning to auto may also create a local partial-cross hole. Fit Scroller
+should try to repair that hole by resizing an adjacent auto window in the same
+column or row. If the repair changes that column or row's scroll-axis size,
+later windows are shifted to keep the layout contiguous.
+
+If the layout cannot fit without scrolling, Fit Scroller may still use a
+compact scroll fit that groups auto windows into columns or rows and minimizes
+the resulting workspace extent.
+
 ## Forced Dimensions
 
 The user may set a window to:
@@ -396,8 +411,11 @@ The user may set a window to:
 Changing this mode triggers layout recomputation.
 
 Version 1 exposes this through `toggle dimension`, which cycles the focused
-window between auto mode and forced modes for the configured allowed
-dimensions.
+window between auto mode and forced modes.
+
+By default, forced modes are derived from the configured allowed dimensions. If
+`force_dimensions` is configured as a non-empty subset of `allowed_dimensions`,
+`toggle dimension` cycles through `force_dimensions` instead.
 
 The cycle order is:
 
@@ -407,8 +425,12 @@ The cycle order is:
 
 Dimension size is compared by logical area. If two dimensions have the same
 area, the wider dimension comes first. If width is also equal, the taller
-dimension comes first. The order of `allowed_dimensions` in configuration does
-not affect the toggle cycle.
+dimension comes first. The order of `allowed_dimensions` or
+`force_dimensions` in configuration does not affect the toggle cycle.
+
+`force_dimensions` does not add valid dimensions. Every listed force dimension
+must already exist in `allowed_dimensions`; otherwise the force-dimension
+override is ignored and the cycle falls back to `allowed_dimensions`.
 
 Forced dimensions are honored before auto dimensions are selected. If a forced
 dimension can fit by itself on the cross axis, Fit Scroller must keep that
@@ -547,7 +569,7 @@ Version 1 exposes the following user commands:
 - `focus previous`: focuses the logical predecessor of the focused window;
 - `focus next`: focuses the logical successor of the focused window;
 - `toggle dimension`: cycles the focused window between auto mode and forced
-  modes for the configured allowed dimensions, from largest to smallest.
+  modes for the effective force-dimension cycle, from largest to smallest.
 
 Commands that target a missing predecessor or successor have no effect.
 

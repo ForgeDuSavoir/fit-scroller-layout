@@ -3,7 +3,7 @@ local support = dofile((debug.getinfo(1, "S").source:sub(2):match("^(.*)/[^/]*$"
 local assert_eq = support.assert_eq
 local assert_true = support.assert_true
 
-local config = support.load_layout("config")
+local config = support.load_layout("config_resolver")
 local geometry = support.load_layout("geometry")
 local traversal = support.load_layout("traversal")
 local solver = support.load_layout("solver")
@@ -346,6 +346,26 @@ local FORCED_EXAMPLES = {
         windows = {
             { id = "A", expected = "0.5x1.0" },
             { id = "B", forced = "1.0x1.0", expected = "1.0x1.0" },
+        },
+    },
+    {
+        name = "new window after three forced fullscreen windows is placed in scroll area",
+        dimensions = CONFIG_1,
+        windows = {
+            { id = "A", forced = "1.0x1.0", expected = "1.0x1.0" },
+            { id = "B", forced = "1.0x1.0", expected = "1.0x1.0" },
+            { id = "C", forced = "1.0x1.0", expected = "1.0x1.0" },
+            { id = "D", expected = "0.5x1.0" },
+        },
+    },
+    {
+        name = "four forced fullscreen windows extend beyond the viewport",
+        dimensions = CONFIG_1,
+        windows = {
+            { id = "A", forced = "1.0x1.0", expected = "1.0x1.0" },
+            { id = "B", forced = "1.0x1.0", expected = "1.0x1.0" },
+            { id = "C", forced = "1.0x1.0", expected = "1.0x1.0" },
+            { id = "D", forced = "1.0x1.0", expected = "1.0x1.0" },
         },
     },
 }

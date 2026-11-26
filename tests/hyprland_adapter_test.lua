@@ -257,12 +257,12 @@ local function test_adapter_uses_spatial_solver_for_spatial_priority()
     }
 
     assert_eq(adapter.recalculate(ctx), nil, "spatial adapter recalc")
-    assert_eq(targets[1].last_rect.w, 1000, "spatial first target keeps largest width")
+    assert_eq(targets[1].last_rect.w, 500, "spatial first target fits before scroll")
     assert_eq(targets[1].last_rect.h, 1000, "spatial first target keeps largest height")
-    assert_eq(targets[2].last_rect.w, 1000, "spatial second target keeps largest width")
+    assert_eq(targets[2].last_rect.w, 500, "spatial second target fits before scroll")
     assert_eq(targets[2].last_rect.h, 1000, "spatial second target keeps largest height")
-    assert_eq(targets[1].last_rect.x, -1000, "spatial reveal shifts first target off viewport")
-    assert_eq(targets[2].last_rect.x, 0, "spatial reveal shows newest target")
+    assert_eq(targets[1].last_rect.x, 0, "spatial first target remains visible")
+    assert_eq(targets[2].last_rect.x, 500, "spatial second target remains visible")
 end
 
 local function test_adapter_spatial_window_addition_splits_existing_window()
@@ -314,7 +314,7 @@ local function test_adapter_spatial_negative_scroll_initial_window_is_visible()
     end
 end
 
-local function test_adapter_spatial_window_removal_preserves_remaining_window()
+local function test_adapter_spatial_window_removal_expands_remaining_auto_window_without_scroll()
     local adapter = load_adapter()
     adapter._config.raw_config.default.placement_priority = "spatial"
 
@@ -335,8 +335,9 @@ local function test_adapter_spatial_window_removal_preserves_remaining_window()
     ctx.targets = { target_a }
     assert_eq(adapter.recalculate(ctx), nil, "spatial removal recalc")
     assert_eq(target_a.last_rect.x, 0, "A preserved x")
-    assert_eq(target_a.last_rect.w, 500, "A preserved width")
-    assert_eq(target_a.last_rect.h, 1000, "A preserved height")
+    assert_eq(target_a.last_rect.y, 0, "A preserved y")
+    assert_eq(target_a.last_rect.w, 1000, "A expanded width")
+    assert_eq(target_a.last_rect.h, 1000, "A expanded height")
 end
 
 local function test_adapter_failed_spatial_move_preserves_state()
@@ -521,6 +522,87 @@ local function test_adapter_successful_structural_command_commits_once()
     assert_eq(commits, 1, "structural command commits once")
 end
 
+local function test_adapter_centers_non_filling_layout()
+    local adapter = load_adapter()
+    adapter._config.raw_config.default.allowed_dimensions = { { 0.5, 0.5 } }
+    adapter._config.raw_config.default.center_windows = true
+
+    local target = placed_target("A", "center-non-filling", true)
+    local ctx = {
+        area = { x = 0, y = 0, w = 1000, h = 800 },
+        monitor = { name = "default" },
+        targets = { target },
+    }
+
+    assert_eq(adapter.recalculate(ctx), nil, "centered recalc")
+    assert_eq(target.last_rect.x, 250, "centered x")
+    assert_eq(target.last_rect.y, 200, "centered y")
+    assert_eq(target.last_rect.w, 500, "centered width")
+    assert_eq(target.last_rect.h, 400, "centered height")
+
+    local ws = workspace_state(adapter, "center-non-filling")
+    assert_eq(ws.last_layout.placements_by_id.A.x, 0, "stored layout x remains uncentered")
+    assert_eq(ws.last_layout.placements_by_id.A.y, 0, "stored layout y remains uncentered")
+end
+
+local function test_adapter_center_windows_false_keeps_current_placement()
+    local adapter = load_adapter()
+    adapter._config.raw_config.default.allowed_dimensions = { { 0.5, 0.5 } }
+    adapter._config.raw_config.default.center_windows = false
+
+    local target = placed_target("A", "center-disabled", true)
+    local ctx = {
+        area = { x = 0, y = 0, w = 1000, h = 800 },
+        monitor = { name = "default" },
+        targets = { target },
+    }
+
+    assert_eq(adapter.recalculate(ctx), nil, "uncentered recalc")
+    assert_eq(target.last_rect.x, 0, "uncentered x")
+    assert_eq(target.last_rect.y, 0, "uncentered y")
+    assert_eq(target.last_rect.w, 500, "uncentered width")
+    assert_eq(target.last_rect.h, 400, "uncentered height")
+end
+
+local function test_adapter_centering_noops_when_layout_fills_viewport()
+    local adapter = load_adapter()
+    adapter._config.raw_config.default.allowed_dimensions = { { 1.0, 1.0 } }
+    adapter._config.raw_config.default.center_windows = true
+
+    local target = placed_target("A", "center-full", true)
+    local ctx = {
+        area = { x = 0, y = 0, w = 1000, h = 800 },
+        monitor = { name = "default" },
+        targets = { target },
+    }
+
+    assert_eq(adapter.recalculate(ctx), nil, "full recalc")
+    assert_eq(target.last_rect.x, 0, "full x")
+    assert_eq(target.last_rect.y, 0, "full y")
+    assert_eq(target.last_rect.w, 1000, "full width")
+    assert_eq(target.last_rect.h, 800, "full height")
+end
+
+local function test_adapter_center_windows_is_not_solver_signature()
+    local adapter = load_adapter()
+    local centered = assert(adapter._config.get_for_display("default", {
+        default = {
+            allowed_dimensions = { { 0.5, 0.5 } },
+            scroll_direction = "right",
+            center_windows = true,
+        },
+    }))
+    local uncentered = assert(adapter._config.get_for_display("default", {
+        default = {
+            allowed_dimensions = { { 0.5, 0.5 } },
+            scroll_direction = "right",
+            center_windows = false,
+        },
+    }))
+
+    assert_eq(adapter._config_signature(centered), adapter._config_signature(uncentered), "centering is not solver signature")
+end
+
 return {
     name = "hyprland_adapter",
     tests = {
@@ -535,7 +617,7 @@ return {
         test_adapter_uses_spatial_solver_for_spatial_priority,
         test_adapter_spatial_window_addition_splits_existing_window,
         test_adapter_spatial_negative_scroll_initial_window_is_visible,
-        test_adapter_spatial_window_removal_preserves_remaining_window,
+        test_adapter_spatial_window_removal_expands_remaining_auto_window_without_scroll,
         test_adapter_failed_spatial_move_preserves_state,
         test_adapter_failed_forced_dimension_preserves_state,
         test_adapter_failed_return_to_auto_preserves_forced_state,
@@ -543,5 +625,9 @@ return {
         test_adapter_failed_rectangle_conversion_preserves_layout_and_viewport,
         test_adapter_rejects_incomplete_layout_before_placement,
         test_adapter_successful_structural_command_commits_once,
+        test_adapter_centers_non_filling_layout,
+        test_adapter_center_windows_false_keeps_current_placement,
+        test_adapter_centering_noops_when_layout_fills_viewport,
+        test_adapter_center_windows_is_not_solver_signature,
     },
 }

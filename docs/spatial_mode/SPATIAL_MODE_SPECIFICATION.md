@@ -9,7 +9,7 @@ The detailed technical design is documented in
 
 The current implemented solver is order-based. Its normative behavior remains
 documented in [SPECIFICATION.md](SPECIFICATION.md) and
-[solver/detailed-logic.md](solver/detailed-logic.md).
+[solver/detailed-logic.md](detailed-logic.md).
 
 Spatial mode is a separate placement strategy. It must not be implemented as a
 small variation of the order solver, because it optimizes a different user
@@ -250,10 +250,13 @@ The solver should try, in order:
    later window toward the scroll origin;
 3. if the freed space is only partial on the cross axis, try to fill it by
    resizing an adjacent auto window in the same column or row;
-4. if no hole-repair candidate is valid, preserve remaining rectangles when
+4. if the resulting workspace does not require scrolling, try to expand auto
+   windows in place so the visible viewport is filled, without changing their
+   world-space origin;
+5. if no hole-repair candidate is valid, preserve remaining rectangles when
    this does not leave an unacceptable visible hole;
-5. reduce trailing scroll extent through normal extent recomputation;
-6. run a global spatial rebuild.
+6. reduce trailing scroll extent through normal extent recomputation;
+7. run a global spatial rebuild.
 
 A freed space spans the full cross axis when it covers the whole viewport
 height in horizontal scroll mode, or the whole viewport width in vertical
@@ -278,6 +281,11 @@ column or row. Candidate dimensions are ranked by scroll-axis size:
 For horizontal scroll, the scroll-axis size is window width and the cross axis
 is height. For vertical scroll, the scroll-axis size is window height and the
 cross axis is width.
+
+When removal leaves a no-scroll layout, auto windows should try to fill the
+viewport. This repair may expand a window on both axes, but it must not move the
+window's world-space origin. Forced windows are not resized by this rule, and
+every expanded window must still use a configured allowed dimension.
 
 Visible holes should be avoided. If holes are allowed internally, they should
 be treated as temporary low-quality states and ranked below equivalent
@@ -320,6 +328,33 @@ dimension.
 
 Returning a window from forced dimension mode to auto dimension mode is a
 manual user action and should produce an optimization attempt.
+
+The previous forced dimension is removed as a hard constraint. The solver
+should not keep it merely because it preserves the current rectangle.
+
+If returning to auto shrinks the target and leaves a partial-cross hole in the
+same column or row, the solver should try to fill that hole before falling back
+to a global rebuild. This repair uses the same partial-cross rules as removal
+and forced-dimension changes:
+
+1. find an adjacent auto window in the affected column or row;
+2. resize that auto window so it covers the freed cross-axis space;
+3. allow the repaired column or row to keep, shrink or grow its scroll-axis
+   size when the resulting rectangle is an allowed dimension;
+4. shift later windows toward or away from the scroll origin if the repaired
+   scroll-axis size changes;
+5. preserve forced neighbors exactly.
+
+When a local repair is not sufficient, the solver may use a compact scroll fit:
+it groups auto windows into compact columns or rows even if the final layout
+still requires scrolling. This is distinct from a full global rebuild because
+it specifically optimizes scroll extent and cross-axis fill for the current
+dimension constraints.
+
+For example, if a full-height forced window returns to a half-height auto
+dimension and creates a hole above the following auto window, the following
+auto window may be reduced to half height and every later window may be shifted
+on the scroll axis to close the resulting scroll gap.
 
 Spatial mode should not simply keep the current dimension because it is still
 allowed. The user is explicitly returning control to the solver.
@@ -494,6 +529,8 @@ Spatial mode tests should cover:
 - adding a window extends scroll when no visible split is possible;
 - removing a window preserves unchanged windows when possible;
 - removing a window reduces trailing scroll when possible;
+- removing a window can expand an auto window in place to fill the viewport
+  when no scroll remains;
 - removing a window compacts full-height holes left for `right` scroll and
   right for `left` scroll;
 - removing a window compacts full-width holes up for `down` scroll and down

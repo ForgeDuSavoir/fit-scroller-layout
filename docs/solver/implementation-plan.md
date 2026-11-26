@@ -8,8 +8,8 @@ Normative references:
 - [Solver detailed logic](detailed-logic.md)
 - [Base solver examples](base-examples.md)
 - [Forced solver examples](forced-examples.md)
-- [Solver module contract](../layout/solver.md)
-- [Configuration module contract](../layout/config.md)
+- [Solver module contract](solver.md)
+- [Configuration module contract](config.md)
 
 ## Current State
 

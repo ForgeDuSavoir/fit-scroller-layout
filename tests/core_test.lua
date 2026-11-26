@@ -3,7 +3,8 @@ local support = dofile((debug.getinfo(1, "S").source:sub(2):match("^(.*)/[^/]*$"
 local assert_eq = support.assert_eq
 local assert_true = support.assert_true
 
-local config = support.load_layout("config")
+local config = support.load_layout("config_resolver")
+local raw_config = support.load_layout("config")
 local state = support.load_layout("state")
 local target_sync = support.load_layout("target_sync")
 local commands = support.load_layout("commands")
@@ -24,6 +25,7 @@ local function test_config_defaults_and_validation()
     }))
     assert_eq(cfg.insert_mode, "view", "insert default")
     assert_eq(cfg.placement_priority, "order", "placement priority default")
+    assert_eq(cfg.center_windows, true, "center windows default")
 
     local invalid, err = config.get_for_display("default", {
         default = {
@@ -34,6 +36,23 @@ local function test_config_defaults_and_validation()
     })
     assert_eq(invalid, nil, "invalid insert mode rejected")
     assert_true(err:match("insert_mode"), "insert mode error message")
+
+    local invalid_center, center_err = config.get_for_display("default", {
+        default = {
+            allowed_dimensions = { { 1, 1 } },
+            scroll_direction = "right",
+            center_windows = "yes",
+        },
+    })
+    assert_eq(invalid_center, nil, "invalid center_windows rejected")
+    assert_true(center_err:match("center_windows"), "center_windows error message")
+end
+
+local function test_user_config_file_is_raw_configuration()
+    assert_eq(type(raw_config.default), "table", "user config exposes default table")
+    assert_eq(type(raw_config.displays), "table", "user config exposes displays table")
+    assert_eq(raw_config.get_for_display, nil, "user config does not expose resolver API")
+    assert_eq(raw_config.raw_config, nil, "user config is not nested in a module table")
 end
 
 local function test_config_placement_priority()
@@ -62,14 +81,17 @@ local function test_config_placement_priority()
             allowed_dimensions = { { 1, 1 } },
             scroll_direction = "right",
             placement_priority = "order",
+            center_windows = true,
         },
         displays = {
             ["DP-1"] = {
                 placement_priority = "spatial",
+                center_windows = false,
             },
         },
     }))
     assert_eq(display_cfg.placement_priority, "spatial", "display placement priority override")
+    assert_eq(display_cfg.center_windows, false, "display center_windows override")
 
     local invalid, err = config.get_for_display("default", {
         default = {
@@ -80,6 +102,98 @@ local function test_config_placement_priority()
     })
     assert_eq(invalid, nil, "invalid placement priority rejected")
     assert_true(err:match("placement_priority"), "placement priority error message")
+end
+
+local function test_config_force_dimensions_controls_toggle_cycle()
+    local cfg = assert(config.get_for_display("default", {
+        default = {
+            allowed_dimensions = {
+                { 1, 1 },
+                { 0.5, 1 },
+                { 0.5, 0.5 },
+            },
+            force_dimensions = {
+                { 0.5, 1 },
+                { 0.5, 0.5 },
+            },
+            scroll_direction = "right",
+        },
+    }))
+
+    assert_eq(table.concat(cfg.toggle_cycle, " "), "0.5x1.0 0.5x0.5", "force dimensions define toggle cycle")
+    assert_eq(cfg.force_dimensions[1].key, "0.5x1.0", "force dimensions normalized")
+
+    local first = assert(config.next_dimension_mode(cfg, "auto"))
+    assert_eq(first.key, "0.5x1.0", "auto cycles to first force dimension")
+
+    local second = assert(config.next_dimension_mode(cfg, first))
+    assert_eq(second.key, "0.5x0.5", "forced mode cycles within force dimensions")
+
+    local back_to_auto = assert(config.next_dimension_mode(cfg, second))
+    assert_eq(back_to_auto.kind, "auto", "last force dimension cycles to auto")
+end
+
+local function test_config_force_dimensions_fallback_and_validation()
+    local fallback = assert(config.get_for_display("default", {
+        default = {
+            allowed_dimensions = {
+                { 1, 1 },
+                { 0.5, 1 },
+            },
+            force_dimensions = {
+                { 0.5, 0.5 },
+            },
+            scroll_direction = "right",
+        },
+    }))
+    assert_eq(table.concat(fallback.toggle_cycle, " "), "1.0x1.0 0.5x1.0", "invalid force dimension membership falls back")
+
+    local invalid_shape, shape_err = config.get_for_display("default", {
+        default = {
+            allowed_dimensions = { { 1, 1 } },
+            force_dimensions = "bad",
+            scroll_direction = "right",
+        },
+    })
+    assert_eq(invalid_shape, nil, "invalid force_dimensions shape rejected")
+    assert_true(shape_err:match("force_dimensions"), "force_dimensions shape error")
+
+    local duplicate, duplicate_err = config.get_for_display("default", {
+        default = {
+            allowed_dimensions = {
+                { 1, 1 },
+                { 0.5, 1 },
+            },
+            force_dimensions = {
+                { 0.5, 1 },
+                { 0.5, 1 },
+            },
+            scroll_direction = "right",
+        },
+    })
+    assert_eq(duplicate, nil, "duplicate force dimensions rejected")
+    assert_true(duplicate_err:match("duplicate force dimension"), "duplicate force dimension error")
+
+    local display_cfg = assert(config.get_for_display("DP-1", {
+        default = {
+            allowed_dimensions = {
+                { 1, 1 },
+                { 0.5, 1 },
+            },
+            force_dimensions = {
+                { 1, 1 },
+            },
+            scroll_direction = "right",
+        },
+        displays = {
+            ["DP-1"] = {
+                force_dimensions = {
+                    { 0.5, 1 },
+                },
+            },
+        },
+    }))
+    assert_eq(table.concat(display_cfg.toggle_cycle, " "), "0.5x1.0", "display force dimensions override")
 end
 
 local function test_target_sync_validation_is_transactional()
@@ -336,8 +450,11 @@ end
 return {
     name = "core",
     tests = {
+        test_user_config_file_is_raw_configuration,
         test_config_defaults_and_validation,
         test_config_placement_priority,
+        test_config_force_dimensions_controls_toggle_cycle,
+        test_config_force_dimensions_fallback_and_validation,
         test_target_sync_validation_is_transactional,
         test_insert_modes,
         test_spatial_target_sync_ignores_insert_mode,

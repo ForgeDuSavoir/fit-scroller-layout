@@ -2,7 +2,7 @@ local support = dofile((debug.getinfo(1, "S").source:sub(2):match("^(.*)/[^/]*$"
 
 local assert_true = support.assert_true
 
-local config = support.load_layout("config")
+local config = support.load_layout("config_resolver")
 local geometry = support.load_layout("geometry")
 local traversal = support.load_layout("traversal")
 local solver = support.load_layout("solver")

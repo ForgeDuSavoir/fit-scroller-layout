@@ -79,7 +79,7 @@ layout/
 
 The existing modules keep their responsibilities:
 
-- `config.lua` validates `placement_priority` and still validates
+- `config_resolver.lua` validates `placement_priority` and still validates
   `insert_mode`;
 - `state.lua` stores workspace state and `last_layout`;
 - `target_sync.lua` synchronizes live targets without applying order semantics
@@ -536,12 +536,14 @@ Algorithm:
    compaction candidate.
 3. If the deleted rect is partial on the cross axis, generate partial-cross
    fill candidates.
-4. Candidate preservation: keep every remaining rect unchanged when no better
+4. If the remaining layout has `workspace_extent <= 1`, generate no-scroll
+   viewport-fill candidates by expanding eligible auto windows in place.
+5. Candidate preservation: keep every remaining rect unchanged when no better
    local repair exists.
-5. Candidate expansion: for partial holes only, expand one adjacent auto window
+6. Candidate expansion: for partial holes only, expand one adjacent auto window
    into the deleted rect when the expanded rect matches an allowed dimension.
-6. Reduce trailing scroll extent through workspace extent recomputation.
-7. If no candidate is valid or quality is unacceptable, run global rebuild.
+7. Reduce trailing scroll extent through workspace extent recomputation.
+8. If no candidate is valid or quality is unacceptable, run global rebuild.
 
 Adjacency:
 
@@ -589,6 +591,19 @@ priority, rank by workspace extent and stable ids.
 Persistent holes are not supported in the first implementation. A keep-unchanged
 candidate with a visible hole may be valid only if no local hole-free candidate
 exists.
+
+No-scroll viewport fill:
+
+- this candidate family is considered only when the remaining layout's
+  workspace extent is at most the viewport size;
+- only auto windows are eligible;
+- the candidate keeps the selected window's world-space `x` and `y` unchanged;
+- the candidate may increase width, height, or both;
+- the resulting rectangle must match one configured allowed dimension;
+- the resulting layout must remain non-overlapping, within the cross axis and
+  without scroll overflow;
+- ranking prefers larger filled area, then smaller workspace extent, then
+  stable target id.
 
 ## Forced Dimension Algorithm
 
@@ -642,9 +657,28 @@ Algorithm:
 1. Generate local candidates for every allowed dimension of the target.
 2. Prefer candidates that reduce workspace extent or visible holes.
 3. Allow the target to shrink or grow according to local fit.
-4. Allow adjacent auto windows to resize when this improves density.
-5. Do not give special preference to preserving the previous forced dimension.
-6. Run global rebuild if no local compaction candidate is valid.
+4. Detect holes freed by the target resize.
+5. For full-cross freed holes, generate compaction candidates using the same
+   translation rules as removal.
+6. For partial-cross freed holes, generate partial-cross fill candidates using
+   the same rules as removal and forced-dimension repair.
+7. Allow adjacent auto windows to resize when this improves density or closes a
+   visible hole.
+8. Do not give special preference to preserving the previous forced dimension.
+9. If the best local candidate would keep the previous forced dimension, try a
+   global no-scroll fit, then a compact scroll fit.
+10. Run global rebuild if no local compaction, hole-repair or compact-fit
+    candidate is valid.
+
+Partial-cross fill during return-to-auto may shrink or grow the repaired
+column or row on the scroll axis. When that happens, later windows on the
+scroll axis must be shifted by the size delta so the result is non-overlapping
+and the trailing extent reflects the repaired geometry.
+
+The compact scroll fit uses the same column or row grouping model as no-scroll
+fit but does not require `workspace_extent <= 1`. It ranks candidates by
+smaller workspace extent first, then larger filled area, then stable dimension
+keys.
 
 The event should produce a visible optimization attempt whenever a better local
 layout exists.
@@ -875,7 +909,9 @@ Solver tests:
 - adding one window appends on the scroll axis when no split exists;
 - removing one window preserves remaining rects when no visible hole results;
 - removing one trailing full-cross window reduces scroll extent without
-  expanding the remaining window;
+  expanding forced remaining windows;
+- removing one trailing full-cross window can expand an auto remaining window
+  in place when no scroll remains;
 - removing one full-cross middle window compacts later windows toward the
   scroll origin;
 - full-cross compaction shifts later windows left for `right` scroll;

@@ -26,7 +26,7 @@ local function load_relative(path)
     return chunk()
 end
 
-local config, config_load_err = load_relative("config.lua")
+local config, config_load_err = load_relative("config_resolver.lua")
 local state, state_load_err = load_relative("state.lua")
 local target_sync, target_sync_load_err = load_relative("target_sync.lua")
 local commands, commands_load_err = load_relative("commands.lua")
@@ -596,15 +596,68 @@ local function update_viewport_offset(workspace, layout, reveal_id)
     return true
 end
 
+local function centered_visible_rects(visible_by_id, enabled)
+    if not enabled then
+        return visible_by_id
+    end
+
+    local min_x, min_y, max_x, max_y
+    for _, rect in pairs(visible_by_id) do
+        min_x = min_x and math.min(min_x, rect.x) or rect.x
+        min_y = min_y and math.min(min_y, rect.y) or rect.y
+        max_x = max_x and math.max(max_x, rect.x + rect.w) or (rect.x + rect.w)
+        max_y = max_y and math.max(max_y, rect.y + rect.h) or (rect.y + rect.h)
+    end
+
+    if min_x == nil then
+        return visible_by_id
+    end
+
+    local group_w = max_x - min_x
+    local group_h = max_y - min_y
+    local shift_x = 0
+    local shift_y = 0
+
+    if group_w < 1 then
+        shift_x = (1 - group_w) / 2 - min_x
+    end
+    if group_h < 1 then
+        shift_y = (1 - group_h) / 2 - min_y
+    end
+
+    if shift_x == 0 and shift_y == 0 then
+        return visible_by_id
+    end
+
+    local centered = {}
+    for id, rect in pairs(visible_by_id) do
+        centered[id] = {
+            x = rect.x + shift_x,
+            y = rect.y + shift_y,
+            w = rect.w,
+            h = rect.h,
+        }
+    end
+
+    return centered
+end
+
 local function prepare_areas(ctx, ordered_targets, effective_config, layout)
-    local converted_by_id = {}
+    local visible_by_id = {}
     for _, descriptor in ipairs(ordered_targets) do
         local rect = layout.placements_by_id[descriptor.id]
         if not rect then
             return nil, "fit-scroller: solver produced no placement for target " .. tostring(descriptor.id)
         end
 
-        local shifted_rect = apply_viewport_offset(rect, effective_config.scroll_direction, layout.viewport_offset or 0)
+        visible_by_id[descriptor.id] = apply_viewport_offset(rect, effective_config.scroll_direction, layout.viewport_offset or 0)
+    end
+
+    visible_by_id = centered_visible_rects(visible_by_id, effective_config.center_windows)
+
+    local converted_by_id = {}
+    for _, descriptor in ipairs(ordered_targets) do
+        local shifted_rect = visible_by_id[descriptor.id]
         local converted, convert_err = convert_rect(ctx, shifted_rect)
         if not converted then
             return nil, convert_err

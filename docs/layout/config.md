@@ -1,11 +1,14 @@
-# `layout/config.lua`
+# `layout/config.lua` and `layout/config_resolver.lua`
 
 ## Purpose
 
-`config.lua` owns the normalized Fit Scroller configuration used by command
-handling and layout computation.
+Fit Scroller separates user configuration from configuration handling:
 
-Its main responsibility is to expose the allowed dimensions and the
+- `layout/config.lua` contains only the user-editable raw configuration;
+- `layout/config_resolver.lua` owns validation, default resolution and
+  normalization.
+
+The resolver's main responsibility is to expose the allowed dimensions and the
 deterministic cycle used by `toggle dimension` for the display currently being
 laid out.
 
@@ -13,7 +16,13 @@ laid out.
 
 `config.lua` must:
 
-- provide a default V1 configuration;
+- return a raw configuration table;
+- remain safe and simple for users to edit;
+- avoid validation, normalization and runtime behavior.
+
+`config_resolver.lua` must:
+
+- load or accept the raw configuration from `config.lua`;
 - support display-specific configuration overrides;
 - resolve the effective configuration for a display;
 - normalize allowed dimensions into stable keys;
@@ -24,6 +33,7 @@ laid out.
 - expose `scroll_direction`;
 - expose `insert_mode`;
 - expose `placement_priority`.
+- expose `center_windows`.
 
 It must not:
 
@@ -38,16 +48,18 @@ The user-facing configuration should support a default display configuration
 and optional display-specific overrides:
 
 ```lua
-RawConfig = {
+return {
     default = {
         allowed_dimensions = {
             { 1.0, 1.0 },
             { 0.5, 1.0 },
             { 0.5, 0.5 },
         },
+        force_dimensions = {},
         scroll_direction = "right",
         insert_mode = "view",
         placement_priority = "order",
+        center_windows = true,
     },
     displays = {
         ["eDP-1"] = {
@@ -55,9 +67,13 @@ RawConfig = {
                 { 1.0, 1.0 },
                 { 0.5, 1.0 },
             },
+            force_dimensions = {
+                { 0.5, 1.0 },
+            },
             scroll_direction = "down",
             insert_mode = "after_focused",
             placement_priority = "order",
+            center_windows = true,
         },
         ["DP-1"] = {
             allowed_dimensions = {
@@ -66,9 +82,14 @@ RawConfig = {
                 { 0.333, 1.0 },
                 { 0.5, 0.5 },
             },
+            force_dimensions = {
+                { 0.5, 1.0 },
+                { 0.5, 0.5 },
+            },
             scroll_direction = "right",
             insert_mode = "view",
             placement_priority = "spatial",
+            center_windows = false,
         },
     },
 }
@@ -101,9 +122,15 @@ Config = {
         "0.5x1.0",
         "0.5x0.5",
     },
+    force_dimensions = {
+        { key = "1.0x1.0", w = 1.0, h = 1.0 },
+        { key = "0.5x1.0", w = 0.5, h = 1.0 },
+        { key = "0.5x0.5", w = 0.5, h = 0.5 },
+    },
     scroll_direction = "right",
     insert_mode = "view",
     placement_priority = "order",
+    center_windows = true,
 }
 ```
 
@@ -112,8 +139,10 @@ The exact Lua table representation may change, but callers must be able to:
 - list all allowed dimensions;
 - check whether a forced dimension key is allowed;
 - get the next dimension mode for `toggle dimension`;
+- list the effective dimensions used by `toggle dimension`;
 - read the configured `insert_mode`;
 - read the configured `placement_priority`.
+- read the configured `center_windows`.
 
 ## Dimension Keys
 
@@ -141,6 +170,17 @@ Each allowed dimension must:
 - have `h > 0` and `h <= 1`;
 - be unique after normalization.
 
+`force_dimensions`, when present, must be a list of dimensions using the same
+shape as `allowed_dimensions`.
+
+Every normalized `force_dimensions` entry must also exist in
+`allowed_dimensions`. If any `force_dimensions` entry is missing from
+`allowed_dimensions`, the configuration remains valid but `force_dimensions` is
+ignored for that effective display configuration. In that case,
+`toggle dimension` falls back to cycling through `allowed_dimensions`.
+
+Duplicate `force_dimensions` entries are invalid after normalization.
+
 `insert_mode` must be one of:
 
 - `last`;
@@ -159,6 +199,12 @@ Unknown insert modes are invalid configuration.
 The default value is `order`.
 
 Unknown placement priorities are invalid configuration.
+
+`center_windows` must be a boolean when provided.
+
+The default value is `true`.
+
+Unknown or non-boolean centering values are invalid configuration.
 
 Invalid configuration must return a readable error. It must not silently clamp
 or remove dimensions.
@@ -180,7 +226,8 @@ for displays without explicit overrides.
 auto -> largest forced dimension -> ... -> smallest forced dimension -> auto
 ```
 
-The cycle is derived from allowed dimensions sorted by:
+When `force_dimensions` is omitted or empty, the cycle is derived from allowed
+dimensions sorted by:
 
 1. largest logical area first;
 2. widest first when areas are equal;
@@ -188,6 +235,21 @@ The cycle is derived from allowed dimensions sorted by:
 
 The order in which `allowed_dimensions` appears in configuration must not
 affect layout selection or the toggle cycle.
+
+When `force_dimensions` is present and every listed dimension also exists in
+`allowed_dimensions`, the cycle is derived from `force_dimensions` instead.
+The same deterministic sorting rules apply, so the order in which
+`force_dimensions` appears in configuration must not affect the toggle cycle.
+
+`force_dimensions` only limits the dimensions offered by `toggle dimension`.
+It does not change which dimensions are valid for automatic layout selection.
+Forced dimension modes must still reference dimensions from
+`allowed_dimensions`.
+
+If `force_dimensions` contains a dimension that is not present in
+`allowed_dimensions`, the resolver must ignore the entire `force_dimensions`
+list for that effective display configuration and use `allowed_dimensions` for
+the toggle cycle.
 
 ## Insert Mode
 
@@ -225,17 +287,52 @@ The default value is `order`.
 Display-specific overrides may change `placement_priority` independently from
 other display configuration fields.
 
+## Center Windows
+
+`center_windows` controls only final presentation.
+
+Supported values:
+
+- `true`: center the resolved window group when it does not fill the available
+  viewport;
+- `false`: keep the current placement behavior without centering.
+
+The default value is `true`.
+
+When enabled, centering is applied after the selected solver has produced
+window positions and dimensions and after viewport reveal/clamping has been
+computed. If the visible window group already fills the available viewport on
+an axis, that axis is not shifted. If it does not fill the viewport, the
+adapter applies a temporary presentation offset that centers the group on that
+axis.
+
+Centering must not affect:
+
+- solver input;
+- solver ranking;
+- normalized world-space placements;
+- `state.last_layout`;
+- `state.viewport_offset`;
+- focus reveal decisions.
+
+Any structural layout recalculation recomputes centering from the newly solved
+layout. The centering offset is therefore not persistent state and is
+implicitly discarded whenever the solver changes the layout.
+
+Display-specific overrides may change `center_windows` independently from other
+display configuration fields.
+
 ## Public API
 
-Recommended functions:
+Recommended `config_resolver.lua` functions:
 
 ```lua
-config.get_for_display(display_id)
-config.validate(raw_config)
-config.resolve_display(raw_config, display_id)
-config.dimension_key(dimension)
-config.is_allowed_dimension_key(config, key)
-config.next_dimension_mode(config, current_mode)
+config_resolver.get_for_display(display_id)
+config_resolver.validate(raw_config)
+config_resolver.resolve_display(raw_config, display_id)
+config_resolver.dimension_key(dimension)
+config_resolver.is_allowed_dimension_key(config, key)
+config_resolver.next_dimension_mode(config, current_mode)
 ```
 
 ### `get_for_display(display_id)`
@@ -260,6 +357,7 @@ Example:
 ```lua
 default = {
     allowed_dimensions = { { 1.0, 1.0 }, { 0.5, 1.0 } },
+    force_dimensions = { { 0.5, 1.0 } },
     scroll_direction = "right",
 }
 
@@ -273,6 +371,7 @@ Effective config for `eDP-1`:
 ```lua
 {
     allowed_dimensions = { { 1.0, 1.0 }, { 0.5, 1.0 } },
+    force_dimensions = { { 0.5, 1.0 } },
     scroll_direction = "down",
 }
 ```
@@ -296,8 +395,11 @@ Expected behavior:
 - Displays without overrides use the default configuration.
 - Invalid display-specific effective configuration returns a readable error.
 - Invalid `insert_mode` returns a readable error.
+- Invalid `force_dimensions` shape returns a readable error.
+- `force_dimensions` entries outside `allowed_dimensions` are ignored as a
+  cycle override.
 - The toggle cycle is independent from config order.
-- `auto` cycles to the largest dimension.
+- `auto` cycles to the largest effective force dimension.
 - The smallest forced dimension cycles back to `auto`.
 
 ## Hardening
@@ -354,6 +456,8 @@ Missing required fields should produce explicit errors:
 - missing `scroll_direction`;
 - unknown `scroll_direction`;
 - unknown `insert_mode`.
+- invalid `force_dimensions` shape.
+- non-boolean `center_windows`.
 
 Example:
 
@@ -384,7 +488,8 @@ shape and reject the other with a clear error.
 
 ## Recovery Behavior
 
-`config.lua` does not decide how to recover from invalid configuration.
+`config_resolver.lua` does not decide how to recover from invalid
+configuration.
 
 It returns an error. The adapter decides whether to keep the last valid layout
 visible for the affected workspace.
@@ -398,12 +503,17 @@ Tests must verify defaulting explicitly:
 
 - `insert_mode` defaults to `view` only when the field is omitted from the
   effective configuration;
+- `center_windows` defaults to `true` only when the field is omitted from the
+  effective configuration;
+- omitted or empty `force_dimensions` defaults the toggle cycle to
+  `allowed_dimensions`;
+- invalid membership in `force_dimensions` falls back to `allowed_dimensions`;
 - display overrides inherit unspecified values from `default`;
 - invalid display-specific values fail for that display instead of falling
   back silently.
 
 The normalized configuration returned to callers must always contain concrete
-`insert_mode` values.
+`insert_mode`, `center_windows` and `toggle_cycle` values.
 
 ## Test Cases
 
@@ -417,11 +527,22 @@ Configuration tests should cover:
 - height equal to `0`;
 - height greater than `1`;
 - duplicate dimensions after normalization;
+- invalid `force_dimensions` shape;
+- duplicate `force_dimensions` after normalization;
+- `force_dimensions` omitted;
+- empty `force_dimensions`;
+- valid `force_dimensions` subset changes `toggle_cycle`;
+- `force_dimensions` containing a dimension outside `allowed_dimensions` falls
+  back to the `allowed_dimensions` cycle;
 - invalid `scroll_direction`;
 - invalid `insert_mode`;
+- invalid `center_windows`;
 - omitted `insert_mode` defaults to `view`;
+- omitted `center_windows` defaults to `true`;
 - display override that changes only `scroll_direction`;
 - display override that changes only `insert_mode`;
+- display override that changes only `force_dimensions`;
+- display override that changes only `center_windows`;
 - invalid display override that must not fall back silently;
 - toggle cycle independent from input order.
 
@@ -430,6 +551,7 @@ Configuration tests should cover:
 - Every invalid config path returns a readable diagnostic.
 - No invalid config produces a partial normalized config.
 - Normalized config always exposes `insert_mode`.
+- Normalized config always exposes `center_windows`.
 - The documented defaults are tested.
 - Display-specific errors identify the affected display.
 - Duplicate dimensions are detected after normalization.

@@ -165,7 +165,7 @@ Valid directions are exactly:
 - `down`;
 - `up`.
 
-This validation should be consistent with `config.lua`.
+This validation should be consistent with `config_resolver.lua`.
 
 ## Transformation Invariants
 

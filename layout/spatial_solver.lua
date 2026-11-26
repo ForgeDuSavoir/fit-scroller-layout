@@ -218,6 +218,33 @@ local function scroll_size(direction, dimension)
     return dimension.h
 end
 
+local function cross_size(direction, dimension)
+    local info = spatial_geometry.direction_info(direction)
+    if info.scroll_axis == "x" then
+        return dimension.h
+    end
+
+    return dimension.w
+end
+
+local function placement_for_axes(direction, scroll_start, scroll_extent, cross_start, cross_extent)
+    if direction == "right" then
+        return { x = scroll_start, y = cross_start, w = scroll_extent, h = cross_extent }
+    end
+
+    if direction == "left" then
+        return { x = -(scroll_start + scroll_extent), y = cross_start, w = scroll_extent, h = cross_extent }
+    end
+
+    if direction == "down" then
+        return { x = cross_start, y = scroll_start, w = cross_extent, h = scroll_extent }
+    end
+
+    if direction == "up" then
+        return { x = cross_start, y = -(scroll_start + scroll_extent), w = cross_extent, h = scroll_extent }
+    end
+end
+
 local function workspace_extent_for(direction, placements_by_id)
     local extent = 0
     for _, rect in pairs(placements_by_id or {}) do
@@ -227,6 +254,14 @@ local function workspace_extent_for(direction, placements_by_id)
         end
     end
     return extent
+end
+
+local function total_area(placements_by_id)
+    local area = 0
+    for _, rect in pairs(placements_by_id or {}) do
+        area = area + spatial_geometry.area(rect)
+    end
+    return area
 end
 
 local function copy_previous_layout(input)
@@ -610,6 +645,24 @@ local function compare_split_candidates(a, b)
     return tostring(a.new_dimension.key) < tostring(b.new_dimension.key)
 end
 
+local function compare_window_added_candidates(a, b)
+    local a_no_scroll = a.workspace_extent <= 1 + 0.000001
+    local b_no_scroll = b.workspace_extent <= 1 + 0.000001
+    if a_no_scroll ~= b_no_scroll then
+        return a_no_scroll
+    end
+
+    if a_no_scroll and a.viewport_fill ~= b.viewport_fill then
+        return a.viewport_fill > b.viewport_fill
+    end
+
+    if a.strategy_rank ~= b.strategy_rank then
+        return a.strategy_rank < b.strategy_rank
+    end
+
+    return compare_split_candidates(a, b)
+end
+
 local function make_layout(input, ids, placements_by_id, dimensions_by_id, strategy, changed_ids)
     local direction = input.config.scroll_direction
     local valid, validation_err = validate_layout_rects(placements_by_id, ids, direction)
@@ -636,6 +689,306 @@ local function make_layout(input, ids, placements_by_id, dimensions_by_id, strat
             changed_ids = changed_ids or {},
         },
     }
+end
+
+local function fit_layout(input, ids, strategy, allow_forced, max_extent)
+    local direction = input.config.scroll_direction
+    local choices_by_index = {}
+
+    for i, id in ipairs(ids) do
+        local mode, mode_err = mode_for(input, id)
+        if not mode then
+            return nil, mode_err
+        end
+        if mode.kind == "forced" and not allow_forced then
+            return nil
+        end
+
+        local dimensions, dimensions_err = candidate_dimensions(input, id)
+        if not dimensions then
+            return nil, dimensions_err
+        end
+        choices_by_index[i] = dimensions
+    end
+
+    local best = nil
+    local function consider(placements_by_id, dimensions_by_id, stable_parts)
+        local extent = workspace_extent_for(direction, placements_by_id)
+        if max_extent and extent > max_extent + 0.000001 then
+            return
+        end
+
+        local layout = make_layout(input, ids, placements_by_id, dimensions_by_id, strategy or "global_fit", {})
+        if not layout then
+            return
+        end
+
+        local candidate = {
+            layout = layout,
+            area = total_area(placements_by_id),
+            workspace_extent = layout.workspace_extent,
+            stable_key = table.concat(stable_parts, "|"),
+        }
+
+        if max_extent then
+            if not best
+                or candidate.area > best.area
+                or (candidate.area == best.area and candidate.workspace_extent < best.workspace_extent)
+                or (candidate.area == best.area and candidate.workspace_extent == best.workspace_extent and candidate.stable_key < best.stable_key) then
+                best = candidate
+            end
+        elseif not best
+            or candidate.workspace_extent < best.workspace_extent
+            or (candidate.workspace_extent == best.workspace_extent and candidate.area > best.area)
+            or (candidate.workspace_extent == best.workspace_extent and candidate.area == best.area and candidate.stable_key < best.stable_key) then
+            best = candidate
+        end
+    end
+
+    local function append_unique_size(sizes, size)
+        for _, existing in ipairs(sizes) do
+            if math.abs(existing - size) <= 0.000001 then
+                return
+            end
+        end
+        table.insert(sizes, size)
+    end
+
+    local function group_scroll_sizes(start_index, end_index)
+        local sizes = {}
+        for _, dimension in ipairs(choices_by_index[start_index]) do
+            append_unique_size(sizes, scroll_size(direction, dimension))
+        end
+        table.sort(sizes)
+
+        local compatible = {}
+        for _, size in ipairs(sizes) do
+            local ok = true
+            for index = start_index + 1, end_index do
+                local found = false
+                for _, dimension in ipairs(choices_by_index[index]) do
+                    if math.abs(scroll_size(direction, dimension) - size) <= 0.000001 then
+                        found = true
+                        break
+                    end
+                end
+                if not found then
+                    ok = false
+                    break
+                end
+            end
+            if ok then
+                table.insert(compatible, size)
+            end
+        end
+
+        return compatible
+    end
+
+    local group_pattern_cache = {}
+    local function group_patterns(start_index, end_index)
+        local cache_key = tostring(start_index) .. ":" .. tostring(end_index)
+        if group_pattern_cache[cache_key] then
+            return group_pattern_cache[cache_key]
+        end
+
+        local patterns = {}
+        for _, size in ipairs(group_scroll_sizes(start_index, end_index)) do
+            local chosen = {}
+            local stable_parts = {}
+
+            local function generate_at(index, cross_sum)
+                if cross_sum > 1 + 0.000001 then
+                    return
+                end
+
+                if index > end_index then
+                    table.insert(patterns, {
+                        scroll_size = size,
+                        dimensions = { table.unpack(chosen) },
+                        stable_key = table.concat(stable_parts, "|"),
+                        area = cross_sum * size,
+                    })
+                    return
+                end
+
+                for _, dimension in ipairs(choices_by_index[index]) do
+                    if math.abs(scroll_size(direction, dimension) - size) <= 0.000001 then
+                        local next_cross = cross_sum + cross_size(direction, dimension)
+                        if next_cross <= 1 + 0.000001 then
+                            table.insert(chosen, dimension)
+                            table.insert(stable_parts, dimension.key)
+                            generate_at(index + 1, next_cross)
+                            table.remove(stable_parts)
+                            table.remove(chosen)
+                        end
+                    end
+                end
+            end
+
+            generate_at(start_index, 0)
+        end
+
+        table.sort(patterns, function(a, b)
+            if a.area ~= b.area then
+                return a.area > b.area
+            end
+            if a.scroll_size ~= b.scroll_size then
+                return a.scroll_size < b.scroll_size
+            end
+            return a.stable_key < b.stable_key
+        end)
+
+        group_pattern_cache[cache_key] = patterns
+        return patterns
+    end
+
+    local function better_compact_fit(a, b)
+        if not b then
+            return true
+        end
+        if a.extent ~= b.extent then
+            return a.extent < b.extent
+        end
+        if a.area ~= b.area then
+            return a.area > b.area
+        end
+        return a.stable_key < b.stable_key
+    end
+
+    local function compact_fit_from(index, memo)
+        if index > #ids then
+            return {
+                extent = 0,
+                area = 0,
+                stable_key = "",
+            }
+        end
+
+        if memo[index] then
+            return memo[index]
+        end
+
+        local best_suffix = nil
+        for end_index = index, #ids do
+            for _, pattern in ipairs(group_patterns(index, end_index)) do
+                local suffix = compact_fit_from(end_index + 1, memo)
+                if suffix then
+                    local stable_key = pattern.stable_key
+                    if suffix.stable_key ~= "" then
+                        stable_key = stable_key .. "|" .. suffix.stable_key
+                    end
+
+                    local candidate = {
+                        extent = pattern.scroll_size + suffix.extent,
+                        area = pattern.area + suffix.area,
+                        stable_key = stable_key,
+                        pattern = pattern,
+                        start_index = index,
+                        suffix = suffix,
+                    }
+
+                    if better_compact_fit(candidate, best_suffix) then
+                        best_suffix = candidate
+                    end
+                end
+            end
+        end
+
+        memo[index] = best_suffix
+        return best_suffix
+    end
+
+    local function layout_from_compact_fit(fit)
+        if not fit then
+            return nil
+        end
+
+        local placements_by_id = {}
+        local dimensions_by_id = {}
+        local offset = 0
+        local current = fit
+
+        while current and current.pattern do
+            local cross_offset = 0
+            for i, dimension in ipairs(current.pattern.dimensions) do
+                local id = ids[current.start_index + i - 1]
+                local dimension_cross_size = cross_size(direction, dimension)
+                placements_by_id[id] = placement_for_axes(direction, offset, current.pattern.scroll_size, cross_offset, dimension_cross_size)
+                dimensions_by_id[id] = clone_dimension(dimension)
+                cross_offset = cross_offset + dimension_cross_size
+            end
+            offset = offset + current.pattern.scroll_size
+            current = current.suffix
+        end
+
+        local layout = make_layout(input, ids, placements_by_id, dimensions_by_id, strategy or "global_fit", {})
+        if not layout then
+            return nil
+        end
+
+        return layout
+    end
+
+    if not max_extent then
+        return layout_from_compact_fit(compact_fit_from(1, {}))
+    end
+
+    local function generate_columns(index, offset, placements_by_id, dimensions_by_id, stable_parts)
+        if max_extent and offset > max_extent + 0.000001 then
+            return
+        end
+
+        if index > #ids then
+            consider(placements_by_id, dimensions_by_id, stable_parts)
+            return
+        end
+
+        for end_index = index, #ids do
+            for _, pattern in ipairs(group_patterns(index, end_index)) do
+                local next_offset = offset + pattern.scroll_size
+                if not max_extent or next_offset <= max_extent + 0.000001 then
+                    local next_placements = {}
+                    local next_dimensions = {}
+                    local next_stable = {}
+
+                    for id, rect in pairs(placements_by_id) do
+                        next_placements[id] = clone_rect(rect)
+                    end
+                    for id, dimension in pairs(dimensions_by_id) do
+                        next_dimensions[id] = clone_dimension(dimension)
+                    end
+                    for i, key in ipairs(stable_parts) do
+                        next_stable[i] = key
+                    end
+
+                    local cross_offset = 0
+                    for i, dimension in ipairs(pattern.dimensions) do
+                        local id = ids[index + i - 1]
+                        local dimension_cross_size = cross_size(direction, dimension)
+                        next_placements[id] = placement_for_axes(direction, offset, pattern.scroll_size, cross_offset, dimension_cross_size)
+                        next_dimensions[id] = clone_dimension(dimension)
+                        table.insert(next_stable, dimension.key)
+                        cross_offset = cross_offset + dimension_cross_size
+                    end
+
+                    generate_columns(end_index + 1, next_offset, next_placements, next_dimensions, next_stable)
+                end
+            end
+        end
+    end
+
+    generate_columns(1, 0, {}, {}, {})
+
+    return best and best.layout or nil
+end
+
+local function no_scroll_fit_layout(input, ids, strategy, allow_forced)
+    return fit_layout(input, ids, strategy or "global_no_scroll_fit", allow_forced, 1)
+end
+
+local function compact_scroll_fit_layout(input, ids, strategy, allow_forced)
+    return fit_layout(input, ids, strategy or "global_scroll_fit", allow_forced, nil)
 end
 
 local function append_window(input, ids, target_id)
@@ -713,7 +1066,9 @@ local function window_added(input, ids, event)
                                     visible = spatial_geometry.is_visible(source_rect, input.viewport_offset, input.config.scroll_direction),
                                     uncovered_area = split.uncovered_area,
                                     workspace_extent = layout.workspace_extent,
+                                    viewport_fill = total_area(layout.placements_by_id),
                                     new_dimension = target_dimension,
+                                    strategy_rank = 1,
                                 })
                             end
                         end
@@ -723,8 +1078,23 @@ local function window_added(input, ids, event)
         end
     end
 
+    local no_scroll_layout = no_scroll_fit_layout(input, ids, "global_no_scroll_fit", true)
+    if no_scroll_layout then
+        table.insert(candidates, {
+            layout = no_scroll_layout,
+            source_id = target_id,
+            source_area = 0,
+            visible = false,
+            uncovered_area = 0,
+            workspace_extent = no_scroll_layout.workspace_extent,
+            viewport_fill = total_area(no_scroll_layout.placements_by_id),
+            new_dimension = no_scroll_layout.dimensions_by_id[target_id],
+            strategy_rank = 2,
+        })
+    end
+
     if #candidates > 0 then
-        table.sort(candidates, compare_split_candidates)
+        table.sort(candidates, compare_window_added_candidates)
         return candidates[1].layout
     end
 
@@ -818,6 +1188,61 @@ local function full_cross_compaction_layout_candidates(input, ids, placements_by
                         workspace_extent = layout.workspace_extent,
                         dimension = { key = "full_cross_compaction" },
                     })
+                end
+            end
+        end
+    end
+
+    return candidates
+end
+
+local function no_scroll_viewport_fill_candidates(input, ids, placements_by_id, dimensions_by_id, strategy)
+    local direction = input.config.scroll_direction
+    if workspace_extent_for(direction, placements_by_id) > 1 + 0.000001 then
+        return {}
+    end
+
+    local candidates = {}
+    for _, id in ipairs(ids) do
+        local rect = placements_by_id[id]
+        local auto, mode_err = is_auto(input, id)
+        if auto == nil then
+            return nil, mode_err
+        end
+
+        if rect and auto then
+            local dimensions, dimensions_err = candidate_dimensions(input, id)
+            if not dimensions then
+                return nil, dimensions_err
+            end
+
+            for _, dimension in ipairs(dimensions) do
+                if dimension.w >= rect.w - 0.000001
+                    and dimension.h >= rect.h - 0.000001
+                    and (dimension.w > rect.w + 0.000001 or dimension.h > rect.h + 0.000001) then
+                    local next_placements_by_id = copy_rects_by_id(placements_by_id)
+                    local next_dimensions_by_id = copy_dimensions_by_id(dimensions_by_id)
+                    next_placements_by_id[id] = {
+                        x = rect.x,
+                        y = rect.y,
+                        w = dimension.w,
+                        h = dimension.h,
+                    }
+                    next_dimensions_by_id[id] = clone_dimension(dimension)
+
+                    if workspace_extent_for(direction, next_placements_by_id) <= 1 + 0.000001 then
+                        local layout = make_layout(input, ids, next_placements_by_id, next_dimensions_by_id, strategy, { id })
+                        if layout then
+                            table.insert(candidates, {
+                                layout = layout,
+                                target_id = id,
+                                visible = true,
+                                area_gain = spatial_geometry.area(next_placements_by_id[id]) - spatial_geometry.area(rect),
+                                workspace_extent = layout.workspace_extent,
+                                dimension = dimension,
+                            })
+                        end
+                    end
                 end
             end
         end
@@ -1057,6 +1482,14 @@ local function window_removed(input, ids, event)
         table.insert(candidates, candidate)
     end
 
+    local fill_candidates, fill_err = no_scroll_viewport_fill_candidates(input, ids, placements_by_id, dimensions_by_id, "local_no_scroll_fill")
+    if not fill_candidates then
+        return nil, fill_err
+    end
+    for _, candidate in ipairs(fill_candidates) do
+        table.insert(candidates, candidate)
+    end
+
     if #candidates > 0 then
         table.sort(candidates, compare_expansion_candidates)
         return candidates[1].layout
@@ -1204,16 +1637,22 @@ local function changed_ids_from_map(ids, changed_by_id, target_id)
 end
 
 local function compare_forced_candidates(a, b)
+    local a_no_scroll = a.workspace_extent <= 1 + 0.000001
+    local b_no_scroll = b.workspace_extent <= 1 + 0.000001
+    if a_no_scroll ~= b_no_scroll then
+        return a_no_scroll
+    end
+
     if a.resolves_scroll_hole ~= b.resolves_scroll_hole then
         return a.resolves_scroll_hole
     end
 
-    if a.pushed_count ~= b.pushed_count then
-        return a.pushed_count < b.pushed_count
-    end
-
     if a.rank ~= b.rank then
         return a.rank < b.rank
+    end
+
+    if a.pushed_count ~= b.pushed_count then
+        return a.pushed_count < b.pushed_count
     end
 
     if a.movement_distance ~= b.movement_distance then
@@ -1242,6 +1681,10 @@ local function compare_auto_candidates(a, b)
 
     if a.workspace_extent ~= b.workspace_extent then
         return a.workspace_extent < b.workspace_extent
+    end
+
+    if a.strategy_rank ~= b.strategy_rank then
+        return a.strategy_rank < b.strategy_rank
     end
 
     if a.movement_distance ~= b.movement_distance then
@@ -1423,6 +1866,18 @@ local function dimension_forced(input, ids, event)
         end
     end
 
+    local no_scroll_layout = no_scroll_fit_layout(input, ids, "global_no_scroll_fit", true)
+    if no_scroll_layout then
+        table.insert(candidates, {
+            layout = no_scroll_layout,
+            resolves_scroll_hole = true,
+            pushed_count = 0,
+            rank = #target_rects * 2 + 1,
+            movement_distance = 0,
+            workspace_extent = no_scroll_layout.workspace_extent,
+        })
+    end
+
     if #candidates > 0 then
         table.sort(candidates, compare_forced_candidates)
         return candidates[1].layout
@@ -1469,6 +1924,7 @@ local function auto_candidate(input, ids, target_id, dimension, target_rect, com
         workspace_extent = layout.workspace_extent,
         reduces_extent = layout.workspace_extent < previous_extent - 0.000001,
         movement_distance = movement,
+        strategy_rank = compact and 1 or 0,
     }
 end
 
@@ -1517,10 +1973,33 @@ local function dimension_auto(input, ids, event)
 
     if #candidates > 0 then
         table.sort(candidates, compare_auto_candidates)
-        return candidates[1].layout
+        local best = candidates[1]
+        local previous_key = event.previous_key
+        local no_scroll_layout = no_scroll_fit_layout(input, ids, "global_no_scroll_fit", true)
+        local no_scroll_dimension = no_scroll_layout and no_scroll_layout.dimensions_by_id[target_id] or nil
+        if previous_key
+            and best.dimension.key == previous_key
+            and no_scroll_dimension
+            and no_scroll_dimension.key ~= previous_key then
+            return no_scroll_layout
+        end
+
+        local compact_layout = compact_scroll_fit_layout(input, ids, "global_scroll_fit", true)
+        local compact_dimension = compact_layout and compact_layout.dimensions_by_id[target_id] or nil
+        if previous_key
+            and best.dimension.key == previous_key
+            and compact_dimension
+            and compact_dimension.key ~= previous_key
+            and compact_layout.workspace_extent < best.workspace_extent - 0.000001 then
+            return compact_layout
+        end
+
+        return best.layout
     end
 
-    return global_rebuild(input, ids, "global_rebuild")
+    local no_scroll_layout = no_scroll_fit_layout(input, ids, "global_no_scroll_fit", true)
+    local compact_layout = compact_scroll_fit_layout(input, ids, "global_scroll_fit", true)
+    return no_scroll_layout or compact_layout or global_rebuild(input, ids, "global_rebuild")
 end
 
 local function dimension_for_rect(input, id, rect)
@@ -1832,6 +2311,12 @@ local function global_candidate(input, ids, placements_by_id, dimensions_by_id, 
 end
 
 local function compare_global_candidates(a, b)
+    local a_no_scroll = a.workspace_extent <= 1 + 0.000001
+    local b_no_scroll = b.workspace_extent <= 1 + 0.000001
+    if a_no_scroll ~= b_no_scroll then
+        return a_no_scroll
+    end
+
     if a.visible_preserved ~= b.visible_preserved then
         return a.visible_preserved > b.visible_preserved
     end
@@ -1928,11 +2413,21 @@ global_rebuild = function(input, ids, strategy)
         return nil, dense_err
     end
 
+    local allow_forced_no_scroll = strategy ~= "initial_global_rebuild"
+    local no_scroll_layout = no_scroll_fit_layout(input, ids, "global_no_scroll_fit", allow_forced_no_scroll)
+
     if type(input.last_layout) ~= "table" or strategy == "initial_global_rebuild" then
-        return dense_layout
+        return no_scroll_layout or dense_layout
     end
 
     local candidates = {}
+    if no_scroll_layout then
+        local no_scroll_candidate = global_candidate(input, ids, no_scroll_layout.placements_by_id, no_scroll_layout.dimensions_by_id, "global_no_scroll_fit", 0)
+        if no_scroll_candidate then
+            table.insert(candidates, no_scroll_candidate)
+        end
+    end
+
     local dense_candidate = global_candidate(input, ids, dense_layout.placements_by_id, dense_layout.dimensions_by_id, "global_rebuild", 3)
     if dense_candidate then
         table.insert(candidates, dense_candidate)

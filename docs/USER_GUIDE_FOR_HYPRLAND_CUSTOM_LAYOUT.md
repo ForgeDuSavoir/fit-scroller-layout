@@ -14,6 +14,7 @@ layout/
   init.lua
   hyprland_adapter.lua
   config.lua
+  config_resolver.lua
   state.lua
   target_sync.lua
   commands.lua
@@ -101,22 +102,27 @@ Use this name anywhere Hyprland expects a layout name.
 
 ## Configuration
 
-Fit Scroller configuration currently lives in `layout/config.lua`, in
-`M.raw_config`.
+Fit Scroller user configuration lives in `layout/config.lua`.
+
+`layout/config.lua` is intentionally limited to the raw configuration table.
+The runtime code that validates, resolves and normalizes configuration lives in
+`layout/config_resolver.lua`.
 
 Default configuration:
 
 ```lua
-M.raw_config = {
+return {
     default = {
         allowed_dimensions = {
             { 1.0, 1.0 },
             { 0.5, 1.0 },
             { 0.5, 0.5 },
         },
+        force_dimensions = {},
         scroll_direction = "right",
         insert_mode = "view",
         placement_priority = "order",
+        center_windows = true,
     },
     displays = {},
 }
@@ -143,6 +149,36 @@ This allows:
 - half width, half height.
 
 Fit Scroller never invents arbitrary dimensions outside this list.
+
+### `force_dimensions`
+
+`force_dimensions` controls the dimensions visited by `toggle dimension`.
+
+Example:
+
+```lua
+allowed_dimensions = {
+    { 1.0, 1.0 },
+    { 0.5, 1.0 },
+    { 0.5, 0.5 },
+}
+
+force_dimensions = {
+    { 1.0, 1.0 },
+    { 0.5, 1.0 },
+}
+```
+
+With this configuration, automatic layout may still use any
+`allowed_dimensions` entry, but `toggle dimension` only cycles through
+`1.0x1.0` and `0.5x1.0`.
+
+If `force_dimensions` is omitted or empty, `toggle dimension` cycles through
+`allowed_dimensions`, which is the current default behavior.
+
+Every `force_dimensions` entry must also exist in `allowed_dimensions`. If one
+entry is not allowed, Fit Scroller ignores `force_dimensions` for that display
+configuration and falls back to the `allowed_dimensions` cycle.
 
 ### `scroll_direction`
 
@@ -206,27 +242,59 @@ layout constraint, and `move previous` / `move next` mutate that order.
 uses directional commands such as `move left`, `move right`, `focus up` and
 `focus down`. In this mode, `previous` and `next` commands are rejected.
 
+### `center_windows`
+
+Valid values:
+
+- `true`;
+- `false`.
+
+Default value:
+
+```lua
+center_windows = true
+```
+
+`false` keeps the current placement behavior.
+
+`true` centers windows when the resolved visible window group does not fill the
+available viewport. If the group already fills the viewport on an axis, that
+axis is left unchanged.
+
+Centering is a final presentation step. It is applied after layout solving and
+viewport reveal, and it does not affect solver decisions, saved layout state or
+focus reveal. When a structural layout change causes the solver to run again,
+the centering offset is discarded and recomputed from the new layout.
+
 ## Per-Display Configuration
 
 You can override configuration by display name:
 
 ```lua
-M.raw_config = {
+return {
     default = {
         allowed_dimensions = {
             { 1.0, 1.0 },
             { 0.5, 1.0 },
             { 0.5, 0.5 },
         },
+        force_dimensions = {
+            { 1.0, 1.0 },
+            { 0.5, 1.0 },
+        },
         scroll_direction = "right",
         insert_mode = "view",
         placement_priority = "order",
+        center_windows = true,
     },
     displays = {
         ["eDP-1"] = {
             allowed_dimensions = {
                 { 1.0, 1.0 },
                 { 1.0, 0.5 },
+            },
+            force_dimensions = {
+                { 1.0, 1.0 },
             },
             scroll_direction = "down",
         },
@@ -239,6 +307,7 @@ M.raw_config = {
             scroll_direction = "right",
             insert_mode = "view",
             placement_priority = "spatial",
+            center_windows = false,
         },
     },
 }
@@ -413,8 +482,10 @@ fit-scroller:
 Common causes:
 
 - invalid `allowed_dimensions`;
+- invalid `force_dimensions`;
 - invalid `scroll_direction`;
 - invalid `insert_mode`;
+- invalid `center_windows`;
 - using an order-only command such as `move previous` while
   `placement_priority = "spatial"`;
 - using a spatial-only command such as `move left` while
@@ -424,7 +495,11 @@ Common causes:
 
 ### Force dimension behaves unexpectedly
 
-`toggle dimension` cycles through configured `allowed_dimensions`.
+`toggle dimension` cycles through configured `force_dimensions` when present
+and valid.
+
+If `force_dimensions` is omitted, empty or references a dimension that is not in
+`allowed_dimensions`, `toggle dimension` cycles through `allowed_dimensions`.
 
 The layout never uses dimensions that are not listed in the effective display
 configuration.
@@ -432,5 +507,6 @@ configuration.
 ## Current Limitations
 
 - Manual scroll commands are not part of V1.
-- Configuration is currently edited in `layout/config.lua`.
+- User configuration is edited in `layout/config.lua`; validation and
+  normalization are handled by `layout/config_resolver.lua`.
 - Hyprland integration is targeted at Hyprland `0.55`.

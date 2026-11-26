@@ -52,6 +52,7 @@ The implementation must:
 layout/
     init.lua
     config.lua
+    config_resolver.lua
     state.lua
     target_sync.lua
     commands.lua
@@ -156,7 +157,7 @@ change, then the viewport flow reveals the focused target using
 
 ## Modules
 
-### [`init.lua`](layout/init.md)
+### [`init.lua`](init.md)
 
 Registers the layout with Hyprland.
 
@@ -172,7 +173,7 @@ Responsibilities:
 
 This file should stay thin.
 
-### [`hyprland_adapter.lua`](layout/hyprland_adapter.md)
+### [`hyprland_adapter.lua`](hyprland_adapter.md)
 
 Owns all direct interaction with the Hyprland Lua layout API.
 
@@ -194,17 +195,21 @@ The adapter must not invoke `hyprctl`, `os.execute` or `io.popen` from
 `recalculate(ctx)` or `layout_msg(ctx, msg)`. All focus integration must use
 Hyprland's in-process Lua API.
 
-### [`config.lua`](layout/config.md)
+### [`config.lua` and `config_resolver.lua`](config.md)
 
-Loads and validates display configuration.
+Separate user-editable display configuration from configuration handling.
 
 Responsibilities:
 
+- keep user configuration in `config.lua` as a raw Lua table;
+- keep validation and normalization in `config_resolver.lua`;
 - resolve configuration for the current display;
 - provide `allowed_dimensions`;
+- provide the effective force dimension cycle;
 - provide `scroll_direction`;
 - provide `insert_mode`;
 - provide `placement_priority`;
+- provide `center_windows`;
 - support display-specific overrides;
 - reject invalid dimensions;
 - reject duplicate dimensions;
@@ -214,13 +219,17 @@ Responsibilities:
 `allowed_dimensions` must behave as a set for layout selection. Its file order
 must not influence layout ranking.
 
+`force_dimensions`, when configured as a valid subset of `allowed_dimensions`,
+limits only the cycle used by `toggle dimension`. It must not change automatic
+layout selection.
+
 The toggle cycle is derived from dimensions sorted by:
 
 1. largest logical area first;
 2. widest first when areas are equal;
 3. tallest first when width is equal.
 
-### [`state.lua`](layout/state.md)
+### [`state.lua`](state.md)
 
 Stores mutable workspace state.
 
@@ -245,7 +254,7 @@ workspace identity directly, but `target.window.workspace` exposes a workspace
 object with stable fields. The adapter should derive the state key from
 `workspace.id`, then `workspace.config_name`, then `workspace.name`.
 
-### [`target_sync.lua`](layout/target_sync.md)
+### [`target_sync.lua`](target_sync.md)
 
 Synchronizes live Hyprland targets with the workspace target list.
 
@@ -265,7 +274,7 @@ Responsibilities:
 This module follows the pattern demonstrated by `manual.lua`, but must also
 clean `dimension_mode_by_id` when windows disappear.
 
-### [`commands.lua`](layout/commands.md)
+### [`commands.lua`](commands.md)
 
 Parses and executes commands.
 
@@ -295,7 +304,7 @@ Command behavior:
 - commands that mutate order or dimension mode require recalculation;
 - focus commands require viewport reveal after focus changes.
 
-### [`geometry.lua`](layout/geometry.md)
+### [`geometry.lua`](geometry.md)
 
 Provides host-independent geometry primitives.
 
@@ -327,7 +336,7 @@ Responsibilities:
 Geometry uses logical coordinates first. Pixel conversion should happen as late
 as possible, ideally in the adapter.
 
-### [`spatial_geometry.lua`](layout/spatial_geometry.md)
+### [`spatial_geometry.lua`](spatial_geometry.md)
 
 Provides host-independent geometry helpers for spatial placement mode.
 
@@ -343,7 +352,7 @@ Responsibilities:
 This module does not place windows, read Hyprland objects or choose layout
 candidates.
 
-### [`spatial_focus.lua`](layout/spatial_focus.md)
+### [`spatial_focus.lua`](spatial_focus.md)
 
 Resolves spatial focus directions to target ids.
 
@@ -358,7 +367,7 @@ Responsibilities:
 This module is used by spatial focus commands. It does not mutate workspace
 state or layout geometry.
 
-### [`traversal.lua`](layout/traversal.md)
+### [`traversal.lua`](traversal.md)
 
 Implements direction-dependent ordering.
 
@@ -376,12 +385,12 @@ V1 traversal rules:
 - `down`: top to bottom, then left to right, then overflow downward;
 - `up`: bottom to top, then left to right, then overflow upward.
 
-### [`solver.lua`](layout/solver.md)
+### [`solver.lua`](solver.md)
 
 Computes the best layout candidate.
 
 The official detailed solver behavior and validation examples are documented in
-[`docs/solver/`](solver/README.md).
+[`docs/solver/`](2%20Projects/Sleeping/fit-scroller-layout/docs/solver/README.md).
 
 Inputs:
 
@@ -431,7 +440,7 @@ Recommended V1 strategy:
 
 This keeps direction handling separate from packing complexity.
 
-### [`spatial_solver.lua`](layout/spatial_solver.md)
+### [`spatial_solver.lua`](spatial_solver.md)
 
 Computes spatial-mode world-space layouts.
 
@@ -455,7 +464,7 @@ Responsibilities:
 The spatial solver is selected only when `placement_priority = "spatial"`.
 It is not a branch inside the order solver.
 
-### [`viewport.lua`](layout/viewport.md)
+### [`viewport.lua`](viewport.md)
 
 Computes and clamps viewport offset.
 
@@ -470,6 +479,20 @@ Manual scrolling is intentionally absent from V1.
 
 `viewport.lua` consumes solver output from `state.last_layout`; it does not
 trigger or influence the solver.
+
+### Centering
+
+Window centering is adapter-owned presentation behavior controlled by
+`config.center_windows`.
+
+When enabled, the adapter may apply a temporary presentation offset after the
+solver has produced world-space placements and after `viewport.lua` has
+computed the scroll offset. The offset centers the visible window group only on
+axes where that group does not fill the available viewport.
+
+Centering must not be represented as solver input, `state.last_layout` or
+`state.viewport_offset`. A structural recalculation discards any previous
+centering effect because the adapter recomputes it from the newly solved layout.
 
 ## Data Flow Details
 
@@ -505,6 +528,10 @@ Forced dimensions are stored in `state.dimension_mode_by_id`.
 ```text
 auto -> largest forced dimension -> ... -> smallest forced dimension -> auto
 ```
+
+The forced dimension cycle comes from `config.force_dimensions` when it is
+present, non-empty and fully contained in `allowed_dimensions`; otherwise it
+comes from `allowed_dimensions`.
 
 When a forced dimension fits on the cross axis, the solver must preserve it and
 push other windows into scroll-axis regions when needed.
@@ -557,9 +584,11 @@ Recommended test layers:
 - `traversal` tests for each direction;
 - `viewport` tests for reveal and clamping;
 - `solver` tests for the official examples in
-  [`docs/solver/`](solver/README.md), order preservation, forced dimensions and
+  [`docs/solver/`](2%20Projects/Sleeping/fit-scroller-layout/docs/solver/README.md), order preservation, forced dimensions and
   independence from focus/viewport state;
-- adapter smoke tests using mocked `ctx` and `target:place`.
+- adapter smoke tests using mocked `ctx` and `target:place`;
+- adapter tests for `center_windows`, including no-op behavior when the visible
+  window group fills the viewport and recomputation after structural solving.
 
 The Hyprland adapter should be kept thin enough that most behavior can be
 verified with plain Lua tests.

@@ -8,13 +8,13 @@ Normative references:
 - [Spatial mode product specification](SPATIAL_MODE_SPECIFICATION.md)
 - [Spatial mode technical specification](SPATIAL_MODE_TECHNICAL_SPECIFICATION.md)
 - [Fit Scroller specification](SPECIFICATION.md)
-- [Architecture](ARCHITECTURE.md)
-- [Configuration module contract](layout/config.md)
-- [Command module contract](layout/commands.md)
-- [State module contract](layout/state.md)
-- [Target synchronization contract](layout/target_sync.md)
-- [Viewport module contract](layout/viewport.md)
-- [Hyprland adapter contract](layout/hyprland_adapter.md)
+- [Architecture](2%20Projects/Sleeping/fit-scroller-layout/docs/ARCHITECTURE.md)
+- [Configuration module contract](config.md)
+- [Command module contract](commands.md)
+- [State module contract](state.md)
+- [Target synchronization contract](target_sync.md)
+- [Viewport module contract](viewport.md)
+- [Hyprland adapter contract](hyprland_adapter.md)
 
 ## Current State
 

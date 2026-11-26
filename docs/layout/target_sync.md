@@ -154,7 +154,8 @@ is provided, or if that id is no longer present, fall back to `last`.
 This is the default V1 behavior.
 
 When `placement_priority = "spatial"`, `insert_mode` is ignored. It remains
-validated by `config.lua`, but it does not affect target synchronization.
+validated by `config_resolver.lua`, but it does not affect target
+synchronization.
 
 Example:
 

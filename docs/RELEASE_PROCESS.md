@@ -28,6 +28,7 @@ fit-scroller/
   init.lua
   hyprland_adapter.lua
   config.lua
+  config_resolver.lua
   state.lua
   target_sync.lua
   commands.lua

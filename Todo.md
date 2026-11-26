@@ -1,9 +1,9 @@
 
 - [x] Fix [[Known issues]]
 - [x] Theorize `spacial` mode
-- [ ] Implement `spacial` mode
-- [ ] Fix Known issue
-- [ ] Test Spatial mode
-- [ ] Document and implement "Forced dimensions options"
-- [ ] Document and implement "Center windows" option
-- [ ] Implement separate config file
+- [x] Implement `spacial` mode
+- [x] Fix Known issue
+- [x] Test Spatial mode
+- [x] Document and implement "Forced dimensions options"
+- [x] Document and implement "Center windows" option
+- [x] Implement separate config file

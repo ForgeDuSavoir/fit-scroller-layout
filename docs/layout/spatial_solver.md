@@ -38,6 +38,7 @@ It must not:
 - read raw Hyprland objects;
 - call `target:place`;
 - invoke viewport reveal;
+- implement `center_windows`;
 - mutate workspace state;
 - use order traversal as user-visible behavior.
 
@@ -117,9 +118,11 @@ window in its own scroll-axis slot:
 - `down`: increasing positive `y`;
 - `up`: increasing negative `y`.
 
-Auto windows use the first normalized allowed dimension. Since `config.lua`
-sorts dimensions by practical size, this is currently the largest configured
-dimension.
+When all targets are auto windows, the solver first tries a no-scroll fit that
+uses the largest allowed dimensions that keep every target inside the viewport
+on the scroll axis. If no such fit exists, auto windows use the first
+normalized allowed dimension. Since `config_resolver.lua` sorts dimensions by
+practical size, this fallback is currently the largest configured dimension.
 
 Forced windows use their forced dimension exactly.
 
@@ -150,19 +153,20 @@ Preserved placements must still match current dimension constraints:
 
 Global candidates are ranked by:
 
-1. count of visible windows preserved without movement or resize;
-2. total movement distance from previous geometry;
-3. resize count;
-4. workspace extent;
-5. fill quality;
-6. stable candidate rank.
+1. no-scroll candidates before scrolling candidates;
+2. count of visible windows preserved without movement or resize;
+3. total movement distance from previous geometry;
+4. resize count;
+5. workspace extent;
+6. fill quality;
+7. stable candidate rank.
 
 Global rebuild does not call or reuse the order solver.
 
 ## Window Addition
 
 For `event.kind = "window_added"`, the solver first tries local split
-candidates.
+candidates and a global no-scroll fit candidate.
 
 A split candidate:
 
@@ -174,11 +178,14 @@ A split candidate:
 
 Split candidates are ranked by:
 
-1. visible source window before non-visible source window;
-2. larger source area;
-3. smaller uncovered source area;
-4. smaller workspace extent;
-5. stable source id.
+1. no-scroll candidates before scrolling candidates;
+2. larger viewport fill for no-scroll candidates;
+3. local split before global no-scroll fit when both produce equivalent fill;
+4. visible source window before non-visible source window;
+5. larger source area;
+6. smaller uncovered source area;
+7. smaller workspace extent;
+8. stable source id.
 
 If no split is valid, the solver appends the new window on the scroll axis
 using the dimension that increases scroll extent the least.
@@ -203,10 +210,12 @@ When the removed rectangle is known, the solver:
    by shifting every later window toward the scroll origin;
 3. when the freed rectangle is only partial on the cross axis, tries to fill it
    by resizing an adjacent auto window in the same column or row;
-4. tries to expand an adjacent auto window into the freed rectangle when the
+4. when no scroll remains, tries to expand auto windows in place to fill the
+   viewport without changing their world-space origin;
+5. tries to expand an adjacent auto window into the freed rectangle when the
    union matches an allowed dimension;
-5. preserves all remaining rectangles when no valid local repair exists;
-6. recomputes `workspace_extent` from the resulting placements.
+6. preserves all remaining rectangles when no valid local repair exists;
+7. recomputes `workspace_extent` from the resulting placements.
 
 Partial cross-axis repair ranks dimensions by scroll-axis size:
 
@@ -220,6 +229,7 @@ Current strategies:
 
 - `local_compact_full_cross_hole`;
 - `local_cross_fill`;
+- `local_no_scroll_fill`;
 - `local_expand`;
 - `local_preserve`;
 - `global_rebuild`.
@@ -241,8 +251,10 @@ The local algorithm tries:
    configured scroll direction.
 
 Auto neighbors may be moved but keep their dimensions. Forced neighbors are not
-pushed by local candidates. If no local candidate succeeds, the solver falls
-back to global rebuild.
+pushed by local candidates. The solver also considers a global no-scroll fit
+candidate that may resize auto windows while preserving forced dimensions. If
+no local or no-scroll candidate succeeds, the solver falls back to global
+rebuild.
 
 When a forced resize frees a rectangle that spans the full cross axis, the
 solver tries to close that hole by shifting every later window toward the scroll
@@ -282,12 +294,27 @@ Candidate ranking prefers layouts that reduce workspace extent. When no
 candidate reduces extent, it prefers larger target area instead of preserving
 the previous forced dimension.
 
+When returning to auto creates a partial cross-axis hole that the local
+candidates do not repair, the global fit candidates can recompose auto windows
+into compact columns or rows. This may fill the freed cross-axis space, change
+the repaired column or row's scroll-axis size, shift later windows and
+recompute the trailing extent.
+
+If the best local candidate would keep the target on the dimension it had while
+forced, the solver also tries global fit candidates. A global no-scroll fit is
+preferred when available. If no no-scroll fit exists, a compact scroll fit may
+still win when it gives the target a different auto dimension and reduces the
+workspace extent. Returning to auto is therefore allowed to recompose other
+auto windows instead of silently preserving the former forced shape.
+
 Forced neighbors are not moved during auto compaction.
 
 Current strategies:
 
 - `local_auto_resize`;
 - `local_auto_compact`;
+- `global_no_scroll_fit`;
+- `global_scroll_fit`;
 - `global_rebuild`.
 
 ## Spatial Move
@@ -331,6 +358,8 @@ Current strategies:
 - `window_removed` can compact later windows into a full-cross freed area.
 - `window_removed` can fill a partial cross-axis hole by resizing an auto
   window in the same column or row.
+- `window_removed` can expand an auto window in place to fill the viewport when
+  no scroll remains.
 - `window_removed` preserves remaining placements when expansion is invalid.
 - `window_removed` reduces trailing scroll extent through extent recomputation.
 - `dimension_forced` applies the requested dimension exactly.
@@ -343,6 +372,12 @@ Current strategies:
   extent.
 - `dimension_auto` can grow a forced-small window when there is no compaction
   gain.
+- `dimension_auto` can fill a partial cross-axis hole created by returning the
+  target to auto by recomposing auto windows into compact columns or rows.
+- `dimension_auto` can use a global no-scroll fit when the best local candidate
+  would keep the previous forced dimension.
+- `dimension_auto` can use a global compact scroll fit when no no-scroll fit
+  exists and the compact fit reduces workspace extent.
 - `move` requires visible directional progress unless it returns `noop`.
 - `move` preserves forced dimensions.
 - Global rebuild preserves valid previous spatial geometry when it wins the

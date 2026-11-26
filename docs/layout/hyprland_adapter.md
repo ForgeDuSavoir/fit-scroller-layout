@@ -360,6 +360,8 @@ available. Partial application of invalid solver output must be avoided.
 - Solver output is the primary placement path.
 - Solver rectangles are applied to the matching Hyprland targets.
 - Adapter-specific rectangle conversion is isolated in this file.
+- Optional `center_windows` presentation offset is applied outside the solver
+  and outside persistent layout state.
 - Solver errors do not produce partial placement updates.
 
 ## Hardening
@@ -503,6 +505,38 @@ target:place(to_hyprland_area(visible_rect))
 
 The exact sign and axis should come from `traversal.lua` direction metadata.
 The adapter should not duplicate direction-specific rules.
+
+## Applying Centering
+
+`config.center_windows` is a presentation option owned by the adapter.
+
+When `center_windows = false`, the adapter uses the current behavior: viewport
+translation is applied and no additional centering is performed.
+
+When `center_windows = true`, the adapter checks the visible rectangles after
+viewport translation and before conversion to Hyprland areas:
+
+- if the visible window group fills the available viewport on an axis, that
+  axis is not shifted;
+- if the group does not fill the available viewport on an axis, the adapter
+  shifts all visible placements on that axis by half of the remaining space.
+
+This centering offset is not a viewport offset. It must not be stored in
+`state.viewport_offset`, `state.last_layout` or solver output. It is recomputed
+each time placements are applied.
+
+Centering must never influence solver behavior:
+
+- structural recalculation calls the solver with uncentered state;
+- viewport-only recalculation reuses `state.last_layout` and applies fresh
+  centering from the current viewport;
+- any solver-produced layout change implicitly discards the previous centering
+  offset.
+
+The centering implementation should translate final rectangles rather than
+alter the viewport. The viewport offset is scroll state bounded by workspace
+overflow; centering may need a presentation shift even when there is no
+workspace overflow.
 
 ## Hidden And Partially Visible Windows
 
@@ -763,6 +797,8 @@ They should cover:
 - focus-only recalculation does not call the solver;
 - focus-only recalculation reapplies `last_layout` translated by
   `viewport_offset`;
+- `center_windows` is applied after viewport translation and never changes
+  `last_layout` or `viewport_offset`;
 - opening a new focused window solves first and then reveals it;
 - `insert_mode = "view"` passes the last fully visible id to `target_sync.lua`;
 - unsupported focus integration returns a readable error;

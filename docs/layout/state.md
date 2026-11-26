@@ -74,7 +74,7 @@ or:
 { kind = "forced", key = "0.5x1.0" }
 ```
 
-The stored forced key must come from `config.lua`.
+The stored forced key must come from `config_resolver.lua`.
 
 Forced dimension modes persist for as long as the window id remains present.
 When a window id disappears during synchronization, its dimension mode must be

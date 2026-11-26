@@ -710,7 +710,16 @@ function M.generate_candidates(input)
     end
 
     local max_states_per_index = 32
-    local max_extent = math.max(3, #input.targets * smallest_scroll_size(items))
+    local min_scroll_size = smallest_scroll_size(items)
+    local required_extent = 0
+    for _, target in ipairs(input.targets) do
+        local forced, forced_err = forced_item_for_target(input, target, items_by_key)
+        if forced_err then
+            return nil, forced_err
+        end
+        required_extent = required_extent + (forced and forced.scroll_size or min_scroll_size)
+    end
+    local max_extent = math.max(3, required_extent)
     local pattern_cache = {}
 
     local function patterns_for(start_index, end_index)

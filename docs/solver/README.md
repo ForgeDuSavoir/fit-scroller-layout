@@ -11,8 +11,8 @@ Use these documents when implementing or validating `layout/solver.lua`:
   examples;
 - [Forced solver examples](forced-examples.md): validated examples with at
   least one forced dimension;
-- [Implementation plan](implementation-plan.md): step-by-step work plan for
+- [Implementation plan](2%20Projects/Sleeping/fit-scroller-layout/docs/solver/implementation-plan.md): step-by-step work plan for
   aligning the current code with the official solver behavior.
 
 The module-level implementation contract remains documented in
-[layout/solver.md](../layout/solver.md).
+[layout/solver.md](solver.md).
