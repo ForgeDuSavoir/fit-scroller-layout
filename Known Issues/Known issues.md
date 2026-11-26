@@ -7,9 +7,9 @@
 - [x] When closing window, windows do not expand do full screen while no scrolling
 
 
-- [ ] SUPER+drag to move windows always sets window at the end (last position)
-- [x] [[Incorrect auto dimension]]
-- [x] When forcing too many dimension, error "no layout candidates generated" (on 4th window) (most likely linked to [[Window incorrectly displayed]])
-- [x] [[Window incorrectly displayed]]
+- [x] SUPER+drag always puts the window at the end — fixed in order mode with `bind_order_drag`
+- [ ] [[Incorrect auto dimension]]
+- [x] Fix "no layout candidates generated" when forcing the fourth window
+- [x] Show and reveal a new window after three forced fullscreen windows
 
 

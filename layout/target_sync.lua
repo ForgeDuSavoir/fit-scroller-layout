@@ -111,6 +111,15 @@ function M.sync(workspace_state, descriptors, state, insert_context)
     end
     workspace_state.order = preserved_order
 
+    local override = insert_context.insertion_override
+    local applied_override_id
+    if placement_priority == "order" and override and present_by_id[override.id]
+        and not contains(workspace_state.order, override.id) then
+        insert_at(workspace_state.order, override.index, override.id)
+        applied_override_id = override.id
+        table.insert(inserted_ids, applied_override_id)
+    end
+
     local batch_insert_index = nil
     for _, descriptor in ipairs(descriptors or {}) do
         local id = descriptor.id
@@ -161,6 +170,7 @@ function M.sync(workspace_state, descriptors, state, insert_context)
 
     return ordered, {
         inserted_ids = inserted_ids,
+        applied_override_id = applied_override_id,
         added_ids = inserted_ids,
         removed_ids = removed_ids,
         structural_changed = #inserted_ids > 0 or #removed_ids > 0,

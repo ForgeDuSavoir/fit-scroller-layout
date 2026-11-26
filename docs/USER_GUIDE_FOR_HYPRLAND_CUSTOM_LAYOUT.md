@@ -337,6 +337,34 @@ hl.bind(mainMod .. " + SHIFT + Z", hl.dsp.layout("move previous"))
 hl.bind(mainMod .. " + SHIFT + X", hl.dsp.layout("move next"))
 ```
 
+### Reorder tiles with SUPER+drag (order mode)
+
+Save the result of loading Fit Scroller and replace your existing drag binding
+for that chord with `bind_order_drag`. Load the layout only once:
+
+```lua
+local fit_scroller = dofile(os.getenv("HOME") .. "/.config/hypr/layouts/fit-scroller/init.lua")
+fit_scroller.bind_order_drag("SUPER + mouse:272")
+```
+
+Use your checkout path instead if you load Fit Scroller from Git. Remove the
+standalone `hl.bind` for that same chord: the helper installs a non-consuming
+press observer, the unchanged native drag binding, and a non-consuming release
+observer, in that order.
+
+On release, the window takes the logical slot of the tile under the pointer,
+pushing that tile one position later. The last visible tile is the exception:
+drop on its leading half to insert before it or on its trailing half to insert
+after it. For a stacked tile, that means top/bottom with horizontal scrolling
+or left/right with vertical scrolling. Dropping in a gap uses the nearest
+visible tile; dropping beyond the trailing edge of the visible tiles inserts
+after the last visible tile. If no valid slot is available, the window returns
+to its original slot. Forced dimensions
+are kept if still allowed. Floating windows, cross-workspace drops, and spatial
+mode keep their normal Hyprland behavior.
+
+### Spatial-mode bindings
+
 Recommended spatial-mode focus bindings:
 
 ```lua

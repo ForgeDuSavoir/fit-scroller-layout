@@ -9,6 +9,7 @@ local suites = {
     dofile(test_dir .. "/spatial_focus_test.lua"),
     dofile(test_dir .. "/spatial_solver_test.lua"),
     dofile(test_dir .. "/hyprland_adapter_test.lua"),
+    dofile(test_dir .. "/order_drop_test.lua"),
 }
 
 local total = 0

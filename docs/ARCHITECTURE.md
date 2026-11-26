@@ -512,6 +512,9 @@ The insertion logic belongs to `target_sync.lua`, not to the solver. For
 `insert_mode = "view"`, the adapter provides the last visible id from
 `state.last_layout` and `state.viewport_offset`.
 
+In order mode, a window returning from SUPER+drag uses a one-shot insertion
+override, as described in [Order-mode drag and drop](layout/order_drag_drop.md).
+
 In spatial mode, `insert_mode` is ignored. `target_sync.lua` appends new ids
 only for deterministic iteration, and `spatial_solver.lua` places new windows
 from geometry.

@@ -64,6 +64,11 @@ end
 
 install_focus_listener()
 
+if type(hl.on) == "function" then
+    hl.on("window.close", adapter.drag_window_departed)
+    hl.on("window.move_to_workspace", adapter.drag_window_departed)
+end
+
 hl.layout.register("fit-scroller", {
     recalculate = function(ctx)
         return adapter.recalculate(ctx)
@@ -73,3 +78,12 @@ hl.layout.register("fit-scroller", {
         return adapter.layout_msg(ctx, msg)
     end,
 })
+
+return {
+    -- Use instead of a standalone native drag binding for this chord.
+    bind_order_drag = function(chord)
+        hl.bind(chord, adapter.drag_press, { non_consuming = true })
+        hl.bind(chord, hl.dsp.window.drag(), { mouse = true })
+        hl.bind(chord, adapter.drag_release, { release = true, non_consuming = true })
+    end,
+}

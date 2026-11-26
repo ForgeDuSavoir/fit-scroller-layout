@@ -603,9 +603,144 @@ local function test_adapter_center_windows_is_not_solver_signature()
     assert_eq(adapter._config_signature(centered), adapter._config_signature(uncentered), "centering is not solver signature")
 end
 
+local function drag_fixture(priority)
+    local adapter = load_adapter()
+    adapter._config.raw_config.default.placement_priority = priority or "order"
+    local a, b = placed_target("A", "drag", true), placed_target("B", "drag", false)
+    local ws = a.window.workspace
+    ws.tiled_layout = "lua:fit-scroller"
+    for _, target in ipairs({ a, b }) do
+        target.window.layout = { name = ws.tiled_layout }
+        target.window.floating = false
+    end
+    hl.get_monitor_at_cursor = function() return { active_workspace = ws } end
+    hl.get_workspace_windows = function() return { a.window, b.window } end
+    local ctx = { targets = { a, b }, area = { x = 0, y = 0, w = 1000, h = 1000 } }
+    assert_eq(adapter.recalculate(ctx), nil, "initial drag layout")
+    return adapter, ctx, a, b
+end
+
+local function test_drag_captures_non_focused_target_before_sync()
+    local adapter, ctx, a, b = drag_fixture()
+    local ws = workspace_state(adapter, "drag")
+    adapter._state.set_dimension_mode(ws, "B", { kind = "forced", key = "0.5x1.0" })
+    adapter.drag_press()
+    ctx.targets = { a }
+    assert_eq(adapter.recalculate(ctx), nil, "removal callback")
+    assert_eq(ws.dimension_mode_by_id.B, nil, "ordinary removal still clears mode")
+    hl.get_cursor_pos = function() return { x = 300, y = 225 } end
+    ctx.targets = { a, b }
+    local effective = assert(adapter._config.get_for_display("default"))
+    local drop = assert(adapter._observe_drag(ctx, "workspace:drag", effective))
+    assert_eq(drop.id, "B", "drag identity is not focus")
+    assert_eq(drop.index, 2, "original slot")
+    assert_eq(drop.previous_id, "A", "original neighbor")
+    assert_eq(drop.mode.key, "0.5x1.0", "original forced mode")
+    assert_eq(drop.point.x, 300, "drop cursor x")
+    assert_eq(drop.point.y, 225, "drop cursor y")
+    local slot = adapter._select_drag_slot("workspace:drag", { { id = "A" }, { id = "B" } }, drop)
+    assert_eq(slot.anchor_id, "A", "uses last rendered surviving tile")
+    assert_eq(slot.index, 1, "leading half of last visible tile inserts before")
+    assert_eq(adapter.recalculate(ctx), nil, "apply drag drop")
+    assert_eq(table.concat(ws.order, ","), "B,A", "drop reorders windows")
+    assert_eq(ws.dimension_mode_by_id.B.key, "0.5x1.0", "forced mode restored")
+    assert_eq(ws.focused_id, "A", "drop does not change focus")
+    assert_eq(adapter._observe_drag(ctx, "workspace:drag", effective), nil, "committed drop is one shot")
+
+    ctx.targets = { a, b, placed_target("C", "drag", false) }
+    adapter._config.raw_config.default.insert_mode = "last"
+    assert_eq(adapter.recalculate(ctx), nil, "normal insertion following drop")
+    assert_eq(table.concat(ws.order, ","), "B,A,C", "normal insertion ignores the old drop")
+end
+
+local function test_drag_can_move_first_tile_to_last()
+    local adapter, ctx, a, b = drag_fixture()
+    adapter.drag_press()
+    ctx.targets = { b }
+    assert_eq(adapter.recalculate(ctx), nil, "detach first tile")
+    hl.get_cursor_pos = function() return { x = 750, y = 500 } end
+    ctx.targets = { a, b }
+    assert_eq(adapter.recalculate(ctx), nil, "drop on last tile trailing half")
+    assert_eq(table.concat(workspace_state(adapter, "drag").order, ","), "B,A", "first tile moves to last")
+end
+
+local function test_drag_retries_failed_placement_with_original_point()
+    local adapter, ctx, a, b = drag_fixture()
+    local ws = workspace_state(adapter, "drag")
+    adapter.drag_press()
+    hl.get_cursor_pos = function() return { x = 250, y = 500 } end
+    ctx.targets = { a }
+    assert_eq(adapter.recalculate(ctx), nil, "detach dragged tile")
+    ctx.targets = { a, b }
+    local place = b.place
+    b.place = function() error("test placement failure") end
+    local err = adapter.recalculate(ctx)
+    assert_true(err and err:match("test placement failure"), "drop placement failure reported")
+    assert_eq(table.concat(ws.order, ","), "A", "failed drop does not commit order")
+    b.place = place
+    hl.get_cursor_pos = function() return { x = 1100, y = 500 } end
+    assert_eq(adapter.recalculate(ctx), nil, "retry detached target before cleanup")
+    assert_eq(table.concat(ws.order, ","), "B,A", "retry uses original drop point")
+end
+
+local function test_drag_ignores_canceled_and_spatial_sessions()
+    for _, kind in ipairs({ "release", "closed", "cross-workspace", "spatial", "expired", "unrelated", "floating" }) do
+        local adapter, ctx, a, b = drag_fixture(kind == "spatial" and "spatial" or "order")
+        if kind == "floating" then b.window.floating = true end
+        adapter.drag_press()
+        ctx.targets = { a }
+        assert_eq(adapter.recalculate(ctx), nil, "removal callback: " .. kind)
+        if kind == "release" then
+            adapter.drag_release()
+        elseif kind == "closed" then
+            adapter.drag_window_departed(b.window)
+        elseif kind == "cross-workspace" then
+            hl.get_monitor_at_cursor = function() return { active_workspace = { id = "other" } } end
+        elseif kind == "unrelated" then
+            ctx.targets = { a, placed_target("C", "drag", false) }
+            assert_eq(adapter.recalculate(ctx), nil, "unrelated insertion cancels drop")
+        end
+        b.window.floating = false
+        ctx.targets = { a, b }
+        local effective = assert(adapter._config.get_for_display("default"))
+        local real_time = os.time
+        if kind == "expired" then os.time = function() return real_time() + 31 end end
+        local ok, drop = pcall(adapter._observe_drag, ctx, "workspace:drag", effective)
+        os.time = real_time
+        assert_true(ok, tostring(drop))
+        assert_eq(drop, nil, "no tracked drop: " .. kind)
+    end
+end
+
+local function test_stationary_and_sole_tile_drags_keep_original_slot()
+    for _, sole in ipairs({ false, true }) do
+        local adapter, ctx, a, b = drag_fixture()
+        local ws = workspace_state(adapter, "drag")
+        if sole then
+            ctx.targets = { b }
+            hl.get_workspace_windows = function() return { b.window } end
+            assert_eq(adapter.recalculate(ctx), nil, "prepare sole tile")
+        end
+        adapter._state.set_dimension_mode(ws, "B", { kind = "forced", key = "0.5x1.0" })
+        hl.get_cursor_pos = function() return { x = 250, y = 500 } end
+        adapter.drag_press()
+        ctx.targets = sole and {} or { a }
+        assert_eq(adapter.recalculate(ctx), nil, "detach tile")
+        ctx.targets = sole and { b } or { a, b }
+        assert_eq(adapter.recalculate(ctx), nil, "return tile")
+        assert_eq(table.concat(ws.order, ","), sole and "B" or "A,B", "original slot retained")
+        assert_eq(ws.dimension_mode_by_id.B.key, "0.5x1.0", "original forced mode retained")
+    end
+end
+
 return {
     name = "hyprland_adapter",
     tests = {
+        test_drag_captures_non_focused_target_before_sync,
+        test_drag_can_move_first_tile_to_last,
+        test_drag_retries_failed_placement_with_original_point,
+        test_drag_ignores_canceled_and_spatial_sessions,
+        test_stationary_and_sole_tile_drags_keep_original_slot,
         test_adapter_no_partial_placement,
         test_adapter_focus_only_keeps_dimensions,
         test_adapter_workspace_switch_keeps_forced_dimensions,

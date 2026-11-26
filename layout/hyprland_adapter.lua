@@ -36,6 +36,7 @@ local solver, solver_load_err = load_relative("solver.lua")
 local spatial_geometry, spatial_geometry_load_err = load_relative("spatial_geometry.lua")
 local spatial_solver, spatial_solver_load_err = load_relative("spatial_solver.lua")
 local viewport, viewport_load_err = load_relative("viewport.lua")
+local order_drop, order_drop_load_err = load_relative("order_drop.lua")
 
 local load_err = config_load_err
     or state_load_err
@@ -47,6 +48,7 @@ local load_err = config_load_err
     or spatial_geometry_load_err
     or spatial_solver_load_err
     or viewport_load_err
+    or order_drop_load_err
 if load_err then
     error(load_err)
 end
@@ -106,7 +108,7 @@ local function target_descriptors(targets)
 end
 
 local function workspace_key_from_workspace(workspace)
-    if type(workspace) == "table" then
+    if type(workspace) == "table" or type(workspace) == "userdata" then
         if workspace.id ~= nil then
             return "workspace:" .. tostring(workspace.id)
         end
@@ -281,11 +283,152 @@ M._display_candidates = display_candidates
 M._config = config
 M._state = state
 
-local function workspace_context(ctx, workspace_state)
+local drag_session
+local DRAG_TIMEOUT_SECONDS = 30
+
+local function pointer_workspace()
+    if not hl then return nil end
+    local monitor = safe_call(hl.get_monitor_at_cursor)
+    return safe_field(monitor, "active_special_workspace") or safe_field(monitor, "active_workspace")
+end
+
+function M.drag_press()
+    drag_session = nil
+    local workspace = pointer_workspace()
+    local key = workspace_key_from_workspace(workspace)
+    if not key or safe_field(workspace, "tiled_layout") ~= "lua:fit-scroller" then return end
+
+    local windows = safe_call(hl.get_workspace_windows, workspace)
+    if type(windows) ~= "table" then return end
+    local tiled = {}
+    local targets = {}
+    for _, window in ipairs(windows) do
+        local id = safe_field(window, "stable_id")
+        local layout = safe_field(window, "layout")
+        if id ~= nil and safe_field(window, "floating") == false
+            and safe_field(layout, "name") == "lua:fit-scroller" then
+            tiled[tostring(id)] = true
+            targets[#targets + 1] = { window = window }
+        end
+    end
+    local effective = config.get_for_display(display_id({ targets = targets }))
+    if not effective or effective.placement_priority ~= "order" then return end
+
+    local snapshot = state.clone_workspace_state(state.get_workspace_state(key))
+    if #snapshot.order == 0 or #snapshot.order ~= #targets then return end
+    for _, id in ipairs(snapshot.order) do
+        if not tiled[id] then return end
+    end
+    local point = safe_call(hl.get_cursor_pos)
+    drag_session = {
+        key = key,
+        order = snapshot.order,
+        modes = snapshot.dimension_mode_by_id,
+        start_point = type(point) == "table" and { x = point.x, y = point.y } or nil,
+        started = os.time(),
+    }
+end
+
+function M.drag_release()
+    drag_session = nil
+end
+
+function M.drag_window_departed(window)
+    local id = safe_field(window, "stable_id")
+    if drag_session and id ~= nil then
+        for _, original_id in ipairs(drag_session.order) do
+            if original_id == tostring(id) then
+                drag_session = nil
+                return
+            end
+        end
+    end
+end
+
+local function observe_drag(ctx, key, effective)
+    local session = drag_session
+    if not session then return nil end
+    if os.time() - session.started >= DRAG_TIMEOUT_SECONDS then
+        drag_session = nil
+        return nil
+    end
+    if workspace_key_from_workspace(pointer_workspace()) ~= session.key then
+        drag_session = nil
+        return nil
+    end
+    -- An empty context has no workspace identity. A sole tile has nowhere
+    -- to reorder, so leave its normal workspace handling alone.
+    if key ~= session.key then
+        if key ~= "global" then
+            for _, target in ipairs(ctx.targets or {}) do
+                if session.id and target_id(target) == session.id then drag_session = nil end
+            end
+        end
+        return nil
+    end
+    if not effective or effective.placement_priority ~= "order" then
+        drag_session = nil
+        return nil
+    end
+
+    local present = {}
+    local count = 0
+    for _, target in ipairs(ctx.targets or {}) do
+        local id = safe_field(target.window, "stable_id")
+        if id == nil or present[tostring(id)] then drag_session = nil; return nil end
+        present[tostring(id)] = true
+        count = count + 1
+    end
+    local missing_index
+    for index, id in ipairs(session.order) do
+        if not present[id] then
+            if missing_index then drag_session = nil; return nil end
+            missing_index = index
+        end
+    end
+    if count ~= #session.order - (missing_index and 1 or 0) then
+        drag_session = nil
+        return nil
+    end
+    if missing_index then
+        local id = session.order[missing_index]
+        if session.drop or (session.id and session.id ~= id) then
+            drag_session = nil
+            return nil
+        end
+        session.id = id
+        session.index = missing_index
+        return nil
+    end
+    if session.drop then return session.drop end
+    if session.id then
+        local point = safe_call(hl.get_cursor_pos)
+        if type(point) == "table" and session.start_point
+            and point.x == session.start_point.x and point.y == session.start_point.y then
+            -- With a zero native threshold even a stationary click can retile.
+            point = nil
+        end
+        session.drop = {
+            id = session.id,
+            index = session.index,
+            previous_id = session.order[session.index - 1],
+            next_id = session.order[session.index + 1],
+            mode = session.modes[session.id] or { kind = "auto" },
+            point = type(point) == "table" and { x = point.x, y = point.y } or nil,
+        }
+        return session.drop
+    end
+end
+
+M._observe_drag = observe_drag
+
+local function workspace_context(ctx, workspace_state, effective_config, config_err, drag_drop)
     local descriptors = target_descriptors(ctx.targets)
-    local effective_config, err = config.get_for_display(display_id(ctx))
+    if not effective_config and not config_err then
+        effective_config, config_err = config.get_for_display(display_id(ctx))
+    end
     if not effective_config then
-        return nil, err
+        return nil, config_err
     end
     local last_visible_id = nil
     if effective_config.placement_priority == "order" and effective_config.insert_mode == "view" then
@@ -296,9 +439,16 @@ local function workspace_context(ctx, workspace_state)
         insert_mode = effective_config.insert_mode,
         placement_priority = effective_config.placement_priority,
         last_visible_id = last_visible_id,
+        insertion_override = drag_drop and { id = drag_drop.id, index = drag_drop.slot.index },
     })
     if not ordered_targets then
         return nil, sync_result
+    end
+    if drag_drop and sync_result.applied_override_id == drag_drop.id then
+        local mode = drag_drop.mode
+        if mode.kind == "forced" and effective_config.dimensions_by_key[mode.key] then
+            state.set_dimension_mode(workspace_state, drag_drop.id, mode)
+        end
     end
 
     return {
@@ -669,7 +819,9 @@ local function prepare_areas(ctx, ordered_targets, effective_config, layout)
     return converted_by_id
 end
 
-local function place_areas(ordered_targets, converted_by_id)
+local rendered_by_workspace = {}
+
+local function place_areas(ctx, ordered_targets, converted_by_id, effective_config)
     for _, descriptor in ipairs(ordered_targets) do
         local target = descriptor.target
         if not target or type(target.place) ~= "function" then
@@ -687,8 +839,26 @@ local function place_areas(ordered_targets, converted_by_id)
         end
     end
 
+    local key = workspace_key(ctx)
+    if key ~= "global" then
+        if effective_config.placement_priority == "order" then
+            rendered_by_workspace[key] = {
+                area = numeric_area(ctx),
+                direction = effective_config.scroll_direction,
+                rects = converted_by_id,
+            }
+        else
+            rendered_by_workspace[key] = nil
+        end
+    end
     return true
 end
+
+local function select_drag_slot(key, ordered_targets, drop)
+    return order_drop.select_slot(descriptor_ids(ordered_targets), drop, rendered_by_workspace[key])
+end
+
+M._select_drag_slot = select_drag_slot
 
 local function ordered_descriptors_for_layout(workspace_state, descriptors, layout)
     local by_id = descriptors_by_id(descriptors)
@@ -738,7 +908,7 @@ local function recover_with_last_layout(ctx, workspace_state, effective_config, 
         return original_err .. " (recovery skipped: " .. convert_err .. ")"
     end
 
-    local placed, place_err = place_areas(ordered_targets, converted_by_id)
+    local placed, place_err = place_areas(ctx, ordered_targets, converted_by_id, effective_config)
     if not placed then
         return original_err .. " (recovery skipped: " .. place_err .. ")"
     end
@@ -805,6 +975,9 @@ local function should_solve(workspace)
 end
 
 local function reveal_target_id(workspace, did_solve)
+    if workspace.sync.applied_override_id then
+        return workspace.sync.applied_override_id
+    end
     local inserted_ids = workspace.sync.inserted_ids or {}
 
     if inserted_ids[#inserted_ids] then
@@ -855,17 +1028,26 @@ function M.recalculate(ctx)
         return "fit-scroller: missing Hyprland layout context"
     end
 
-    local current_state = state.get_workspace_state(workspace_key(ctx))
+    local key = workspace_key(ctx)
+    local current_state = state.get_workspace_state(key)
     local draft_state = state.clone_workspace_state(current_state)
-    local workspace, err = workspace_context(ctx, draft_state)
+    local effective_config, config_err = config.get_for_display(display_id(ctx))
+    local drag_drop = observe_drag(ctx, key, effective_config)
+    if drag_drop and not drag_drop.slot then
+        local present = descriptors_by_id(target_descriptors(ctx.targets))
+        local survivors = {}
+        for _, id in ipairs(current_state.order) do
+            if present[id] then survivors[#survivors + 1] = present[id] end
+        end
+        drag_drop.slot = select_drag_slot(key, survivors, drag_drop)
+    end
+    local workspace, err = workspace_context(ctx, draft_state, effective_config, config_err, drag_drop)
     if not workspace then
-        local effective_config = config.get_for_display(display_id(ctx))
         if effective_config then
             return recover_with_last_layout(ctx, current_state, effective_config, err)
         end
         return err
     end
-
     local ordered_targets = workspace.targets
     local n = #ordered_targets
     if n == 0 then
@@ -917,7 +1099,7 @@ function M.recalculate(ctx)
         return recover_with_last_layout(ctx, current_state, workspace.config, convert_err)
     end
 
-    local placed, place_err = place_areas(ordered_targets, converted_by_id)
+    local placed, place_err = place_areas(ctx, ordered_targets, converted_by_id, workspace.config)
     if not placed then
         return recover_with_last_layout(ctx, current_state, workspace.config, place_err)
     end
@@ -932,6 +1114,9 @@ function M.recalculate(ctx)
         return recover_with_last_layout(ctx, current_state, workspace.config, state_err)
     end
     state.commit_workspace_state(current_state, draft_state)
+    if drag_drop and drag_session and drag_session.drop == drag_drop then
+        drag_session = nil
+    end
 end
 
 function M.layout_msg(ctx, msg)
@@ -985,7 +1170,7 @@ function M.layout_msg(ctx, msg)
             return convert_err
         end
 
-        local placed, place_err = place_areas(workspace.targets, converted_by_id)
+        local placed, place_err = place_areas(ctx, workspace.targets, converted_by_id, workspace.config)
         if not placed then
             return place_err
         end

@@ -33,8 +33,12 @@ fit-scroller/
   target_sync.lua
   commands.lua
   geometry.lua
+  order_drop.lua
   traversal.lua
   solver.lua
+  spatial_focus.lua
+  spatial_geometry.lua
+  spatial_solver.lua
   viewport.lua
 LICENSE
 ```
@@ -123,8 +127,8 @@ tar -C "dist/fit-scroller-layout-$VERSION" \
 Create a checksum file:
 
 ```sh
-sha256sum "dist/fit-scroller-layout-$VERSION.tar.gz" \
-    > "dist/fit-scroller-layout-$VERSION.tar.gz.sha256"
+(cd dist && sha256sum "fit-scroller-layout-$VERSION.tar.gz" \
+    > "fit-scroller-layout-$VERSION.tar.gz.sha256")
 ```
 
 Verify the archive content:
